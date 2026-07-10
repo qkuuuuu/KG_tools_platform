@@ -1,0 +1,10 @@
+# Frontend .dockerignore
+node_modules
+dist
+.git
+.gitignore
+*.log
+vite.log
+vite.err.log
+g6-temp.json
+install-g6.ps1

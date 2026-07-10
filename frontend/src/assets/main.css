@@ -1,0 +1,149 @@
+/* 全局样式 - 知识图谱构建平台 */
+:root {
+  --kg-primary: #2c3e50;
+  --kg-accent: #3498db;
+  --kg-success: #27ae60;
+  --kg-warning: #f39c12;
+  --kg-danger: #e74c3c;
+  --kg-bg: #f5f7fa;
+  --kg-sidebar: #2c3e50;
+  --kg-sidebar-text: #ecf0f1;
+  --kg-border: #dcdfe6;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  background: var(--kg-bg);
+  color: var(--kg-primary);
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 布局 */
+.kg-layout {
+  display: flex;
+  height: 100vh;
+}
+
+.kg-sidebar {
+  width: 220px;
+  background: var(--kg-sidebar);
+  color: var(--kg-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.kg-sidebar-logo {
+  padding: 20px;
+  font-size: 18px;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  text-align: center;
+}
+
+.kg-sidebar-menu {
+  flex: 1;
+  padding: 10px 0;
+}
+
+.kg-sidebar-menu a {
+  display: block;
+  padding: 12px 24px;
+  color: var(--kg-sidebar-text);
+  text-decoration: none;
+  transition: background 0.2s;
+  font-size: 14px;
+}
+
+.kg-sidebar-menu a:hover,
+.kg-sidebar-menu a.router-link-active {
+  background: rgba(255,255,255,0.1);
+}
+
+.kg-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* 页面通用 */
+.kg-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.kg-page-header h2 {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.kg-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  margin-bottom: 20px;
+}
+
+/* 项目卡片网格 */
+.kg-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.kg-project-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  border: 2px solid transparent;
+}
+
+.kg-project-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  border-color: var(--kg-accent);
+}
+
+.kg-stat-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.kg-stat-item {
+  flex: 1;
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.kg-stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--kg-accent);
+}
+
+.kg-stat-label {
+  font-size: 14px;
+  color: #909399;
+  margin-top: 8px;
+}

@@ -1,0 +1,19 @@
+# Backend .dockerignore
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.env
+*.log
+uvicorn.log
+uvicorn.err.log
+uploads/*
+!uploads/.gitkeep
+tests/
+test_*.py
+verify_*.py
+check_*.py
+reset_pw.py
+init_admin.py
+.alembic
