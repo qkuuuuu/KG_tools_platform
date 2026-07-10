@@ -1,12 +1,7 @@
-# 🧠 智能知识图谱构建与融合平台
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
-[![Vue](https://img.shields.io/badge/Vue-3.4+-success.svg)](https://vuejs.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://www.docker.com/)
+# 智能知识图谱构建与融合平台 (KG Platform)
 > 一个支持多源异构数据接入、多方法智能抽取、大模型自动化质检与人工协同复核 (HITL) 的全链路工业级知识图谱构建数据工厂。
 ---
-## 📖 目录
+## 目录
 - [项目简介](#项目简介)
 - [核心特性](#核心特性)
 - [技术架构](#技术架构)
@@ -15,17 +10,29 @@
 - [API 文档](#api-文档)
 - [数据库设计](#数据库设计)
 - [开发进度](#开发进度)
-- [贡献指南](#贡献指南)
+- [常见问题](#常见问题)
 ---
-## 🎯 项目简介
+## 项目简介
 传统的知识图谱构建往往高度依赖人工标注或单一的算法模型，难以应对复杂的文档排版和多变的业务需求。本平台旨在打造一个 **“低门槛、高配置”的知识流水线**，通过集成前沿的解析工具、多种抽取算法，并辅以大模型质检与人工协同兜底，彻底打通从非结构化文本到高质量图谱资产的最后一公里。
 **目标用户**：
 - 知识工程人员 / 业务专家
 - NLP 算法工程师
 - 数据清洗管理员
 ---
-## ✨ 核心特性
-### 🔄 全链路闭环流程
+## 核心特性
+### 功能模块清单
+| 模块 | 核心功能 | 状态 |
+|------|----------|------|
+| 项目管理 | 多项目创建、切换、独立配置、数据隔离 | ✅ 已实现 |
+| LLM 网关 | 多阶段模型路由、API 密钥管理、成本控制 | ✅ 已实现 |
+| 数据接入 | PDF/Word/图片等格式解析 | 🔶 部分实现 |
+| Schema 编辑器 | 动态定义实体关系约束 | ✅ 已实现 |
+| 抽取引擎池 | 规则/深度学习/大模型 Prompt 等多种方法 | 🔶 框架已搭建 |
+| LLM 审批 | 自动化质检、置信度评分、阈值分流 | 🔶 框架已搭建 |
+| HITL 工作台 | 人工审核、修改、驳回、上下文对照 | ✅ UI 已实现 |
+| 知识融合 | 实体对齐、别名管理、血缘追溯 | 🔶 框架已搭建 |
+| 资产导出 | CSV/JSON/Neo4j Cypher 等格式 | 🔶 部分实现 |
+### 全链路闭环流程
 ```mermaid
 flowchart LR
     A[多源数据接入] --> B[智能解析网关]
@@ -37,41 +44,15 @@ flowchart LR
     F -- < 阈值 --> H[HITL人工审核]
     H --> G
     G --> I[图谱资产输出]
-🎛️ 功能模块清单
-模块	核心功能	状态	
-项目管理	多项目创建、切换、独立配置、数据隔离	✅ 已实现	
-LLM 网关	多阶段模型路由、API 密钥管理、成本控制	✅ 已实现	
-数据接入	PDF/Word/图片等格式解析	🔶 部分实现	
-Schema 编辑器	动态定义 [主语-关系-宾语] 约束	✅ 已实现	
-抽取引擎池	规则/深度学习/大模型 Prompt 等多种方法	🔶 框架已搭建	
-LLM 审批	自动化质检、置信度评分、阈值分流	🔶 框架已搭建	
-HITL 工作台	人工审核、修改、驳回、上下文对照	✅ UI 已实现	
-知识融合	实体对齐、别名管理、血缘追溯	🔶 框架已搭建	
-资产导出	CSV/JSON/Neo4j Cypher 等格式	🔶 部分实现	
-🏗️ 技术架构
+技术架构
 技术栈选型
-前端技术栈
-框架：Vue 3 (Composition API)
-UI 组件库：Element Plus
-状态管理：Pinia
-HTTP 客户端：Axios
-图谱可视化：G6
-构建工具：Vite
-后端技术栈
-框架：FastAPI (Python 3.10+)
-数据验证：Pydantic
-ORM：SQLAlchemy
-认证：JWT (PyJWT) + Passlib (bcrypt)
-数据库迁移：Alembic
-AI 与数据工具
-LLM 对接：LangChain / OpenAI SDK / Anthropic SDK
-PDF 解析：pdfplumber, PyMuPDF, MinerU
-OCR：PaddleOCR
-通用解析：Unstructured, Docling
-基础设施
-容器化：Docker, Docker Compose
-反向代理：Nginx
-数据库：PostgreSQL 16, Neo4j 5
+类别	技术选型	
+前端	Vue 3 (Composition API) + Element Plus + Pinia + Axios + G6	
+后端	FastAPI (Python 3.10+) + Pydantic + SQLAlchemy + Alembic + JWT	
+AI 对接	LangChain / OpenAI SDK / Anthropic SDK	
+数据库	PostgreSQL 16 + Neo4j 5	
+容器化	Docker + Docker Compose	
+反向代理	Nginx	
 系统架构图
 flowchart LR
     subgraph Frontend [前端应用]
@@ -97,7 +78,7 @@ flowchart LR
     B --> D
     B --> E
     B --> F
-🚀 快速开始
+快速开始
 前置要求
 Python 3.10+
 Node.js 18+
@@ -161,7 +142,7 @@ Neo4j 控制台	http://localhost:7474	Neo4j Browser
 用户名：admin
 密码：admin123
 角色：admin
-📁 项目结构
+项目结构
 kg-platform/
 ├── backend/                    # FastAPI 后端应用
 │   ├── app/
@@ -204,16 +185,16 @@ kg-platform/
 ├── docker-compose.yml         # Docker Compose 配置
 ├── .env.example               # 环境变量示例
 └── README.md                  # 项目说明文档
-📖 API 文档
+API 文档
 核心 API 接口列表
 <details>
-<summary>🔐 认证接口</summary>
+<summary>认证接口</summary>
 POST /api/v1/auth/login - JWT 登录
 POST /api/v1/auth/register - 用户注册
 GET /api/v1/auth/me - 获取当前用户信息
 </details>
 <details>
-<summary>📁 项目管理接口</summary>
+<summary>项目管理接口</summary>
 POST /api/v1/projects/ - 创建项目
 GET /api/v1/projects/ - 项目列表
 GET /api/v1/projects/{id} - 项目详情
@@ -221,20 +202,20 @@ PUT /api/v1/projects/{id} - 更新项目
 DELETE /api/v1/projects/{id} - 删除项目
 </details>
 <details>
-<summary>🎯 Schema 管理接口</summary>
+<summary>Schema 管理接口</summary>
 POST /api/v1/projects/{id}/schemas - 创建 Schema 约束
 GET /api/v1/projects/{id}/schemas - Schema 列表
 PUT /api/v1/schemas/{id} - 更新 Schema
 DELETE /api/v1/schemas/{id} - 删除 Schema
 </details>
 <details>
-<summary>🛠️ HITL 审核接口</summary>
+<summary>HITL 审核接口</summary>
 GET /api/v1/hitl/stats/{project_id} - HITL 统计
 GET /api/v1/hitl/pending/{project_id} - 待审核队列
 POST /api/v1/hitl/decide/{triple_id} - 审核决定（通过/拒绝/修改）
 </details>
 <details>
-<summary>🔀 知识融合接口</summary>
+<summary>知识融合接口</summary>
 GET /api/v1/fusion/suggestions/{project_id} - 融合建议
 POST /api/v1/fusion/merge - 实体融合
 GET /api/v1/fusion/entities/{project_id} - 融合实体列表
@@ -249,7 +230,7 @@ curl -X POST "http://localhost:8000/api/v1/projects/" \
   -H "Authorization: Bearer <your_token>" \
   -H "Content-Type: application/json" \
   -d '{"name": "医疗知识图谱项目"}'
-🗄️ 数据库设计
+数据库设计
 系统基于 PostgreSQL 设计，共包含 8 张核心表：
 表名	描述	
 projects	项目表，存储项目基本信息	
@@ -260,8 +241,8 @@ triples_raw	原始待审核三元组表，记录抽取结果和置信度
 audit_logs	数据血缘与人工审核日志表	
 entities_fused	最终融合实体库，存储标准实体和别名	
 triples_fused	最终图谱资产表，存储融合后的三元组	
-🗺️ 开发进度
-✅ 已完成功能 (2026-06-29)
+开发进度
+已完成功能 (2026-06-29)
 [x] 项目基础架构搭建
 [x] 用户认证与授权
 [x] 项目管理模块
@@ -270,21 +251,21 @@ triples_fused	最终图谱资产表，存储融合后的三元组
 [x] 基础抽取框架
 [x] HITL 审核工作台 UI
 [x] 知识融合基础框架
-🔶 部分实现功能
+部分实现功能
 [ ] 多格式文档解析（支持 PDF/Word/图片等）
 [ ] LLM 质检与审批流程
 [ ] 实体融合与对齐算法
 [ ] 数据血缘完整追踪
-🔜 计划中功能
+计划中功能
 [ ] 接入 MinerU/pdfplumber 实际解析逻辑
 [ ] 接入 LLM 抽取算法（UIE/LLM Prompt）
 [ ] 完善 HITL 工作台 UI
 [ ] 前端生产构建 + Nginx 部署
 [ ] Docker Compose 一键启动后端
 [ ] 图谱可视化与查询界面
-🛠️ 常见问题与修复记录
+常见问题
 <details>
-<summary>🔧 环境配置问题排查</summary>
+<summary>环境配置问题排查</summary>
 PostgreSQL 连接问题
 确保 docker-compose.yml 中 postgres 服务已启动
 检查 .env 中的 DATABASE_URL 格式是否正确
@@ -301,21 +282,4 @@ Neo4j 连接
 首次启动 Neo4j 可能需要较长时间，请耐心等待
 访问 http://localhost:7474 设置初始密码
 </details>
-🤝 贡献指南
-我们欢迎所有形式的贡献，包括但不限于：
-🐛 Bug 报告和修复
-✨ 新功能建议和实现
-📖 文档改进
-🎨 UI/UX 优化
-贡献流程
-Fork 本仓库
-创建特性分支 (git checkout -b feature/AmazingFeature)
-提交更改 (git commit -m 'Add some AmazingFeature')
-推送到分支 (git push origin feature/AmazingFeature)
-提交 Pull Request
-📄 许可证
-本项目采用 MIT 许可证 - 查看 LICENSE 文件了解详情。
-📞 联系方式
-项目主页：[GitHub Repository]
-问题反馈：[GitHub Issues]
 最后更新时间：2026-06-29
