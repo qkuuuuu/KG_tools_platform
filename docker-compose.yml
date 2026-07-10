@@ -76,12 +76,16 @@ services:
       KG_JWT_SECRET: ${JWT_SECRET:?请在.env中设置JWT_SECRET}
       KG_ENCRYPTION_KEY: ${ENCRYPTION_KEY:?请在.env中设置ENCRYPTION_KEY}
       KG_CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # 国内模型下载加速
+      HF_ENDPOINT: https://hf-mirror.com
+      MINERU_MODEL_SOURCE: modelscope
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: "50"
     ports:
       - "8000:8000"
     volumes:
       - uploads-data:/app/uploads
+      - model-cache:/root/.cache        # 模型缓存（HuggingFace/ModelScope），重启不重下
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -112,3 +116,4 @@ volumes:
   neo4j-data:
   neo4j-logs:
   uploads-data:
+  model-cache:
