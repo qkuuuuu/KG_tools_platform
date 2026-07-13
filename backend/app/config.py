@@ -5,6 +5,7 @@ import hashlib
 import logging
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from cryptography.fernet import Fernet
 
 # 在 Settings 类定义之前加载 .env 文件，确保 _get_env_or_fail 能读到
@@ -93,8 +94,7 @@ class Settings(BaseSettings):
     # 启发式关系三元组被压低的置信度
     HEURISTIC_CONFIDENCE: float = 30.0
 
-    class Config:
-        env_file = ".env"
+    model_config = ConfigDict(env_file=".env")
 
 
 settings = Settings()
