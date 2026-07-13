@@ -5,7 +5,7 @@ import csv
 import json
 import io
 import re
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -16,7 +16,8 @@ from app.utils.security import get_current_user, require_admin
 from app.services.fusion.neo4j_exporter import (
     generate_cypher_script, generate_jsonld, try_neo4j_import, query_graph,
 )
-from app.services.ttl_io import ttl_to_triples, triples_to_ttl
+from app.services.ttl_io import ttl_to_schema, triples_to_ttl
+from app.services.schema_dsl import save_schema_constraints
 
 router = APIRouter()
 
@@ -424,63 +425,35 @@ async def neo4j_query(
 @router.post("/{project_id}/import-ttl")
 async def import_ttl(
     project_id: UUID,
-    payload: dict = Body(...),
+    file: UploadFile = File(...),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """导入 Protégé TTL (Turtle) 文件内容
-    
-    自动解析为 Schema 约束 + 三元组，写入当前项目数据库。
-    
-    请求体: {"ttl_content": "@prefix owl: ..."}
+    """导入 Protégé TTL (Turtle) 本体文件，自动解析为「实体-关系-实体」Schema 约束
+
+    前端通过文件上传（.ttl）调用；后端用 rdflib 解析 OWL ObjectProperty，
+    提取 (domain -> range) 作为关系，rdfs:label 作为中文关系名 / 实体名，
+    写入 schema_constraints 表（与 DSL 导入一致）。会先清空本项目旧约束再写入。
     """
-    ttl_content = payload.get("ttl_content", "")
-    if not ttl_content or not ttl_content.strip():
-        raise HTTPException(status_code=400, detail="TTL 内容不能为空")
+    raw = await file.read()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        content = raw.decode("utf-8", errors="ignore")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="TTL 文件内容为空")
 
     try:
-        result = ttl_to_triples(ttl_content)
+        result = ttl_to_schema(content)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"TTL 解析失败: {str(e)}")
 
-    # 写入 Schema 约束
-    for s in result.get("schemas", []):
-        if s["type"] == "class":
-            existing = db.query(SchemaConstraint).filter(
-                SchemaConstraint.project_id == project_id,
-                SchemaConstraint.subject_type == s["name"],
-                SchemaConstraint.predicate == "isA",
-            ).first()
-            if not existing:
-                db.add(SchemaConstraint(
-                    project_id=project_id,
-                    subject_type=s["name"],
-                    predicate="isA",
-                    object_type="Thing",
-                ))
-
-    # 写入三元组
-    imported_count = 0
-    for t in result.get("triples", []):
-        db.add(TripleRaw(
-            project_id=project_id,
-            subject=t["subject"][:500],
-            predicate=t["predicate"][:200],
-            object=t["object"][:500],
-            extraction_method="TTL_IMPORT",
-            llm_confidence=t.get("confidence", 95.0),
-            status="PASSED",
-            chunk_text=f"来源: TTL 导入 | {t.get('source', '')}",
-        ))
-        imported_count += 1
-
-    db.commit()
-
+    save_schema_constraints(db, project_id, result["relations"])
     return {
-        "message": f"导入成功: {imported_count} 条三元组, {result['stats']['classes']} 个类, {result['stats']['properties']} 个属性",
-        "stats": result["stats"],
-        "schemas_created": result["stats"]["classes"],
-        "triples_imported": imported_count,
+        "message": f"导入成功: {len(result['relations'])} 条关系约束, {len(result['entities'])} 个实体类型",
+        "relations_imported": len(result["relations"]),
+        "entities_count": len(result["entities"]),
+        "namespace": result["namespace"],
     }
 
 

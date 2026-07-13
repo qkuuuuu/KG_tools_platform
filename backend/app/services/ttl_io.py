@@ -3,7 +3,7 @@
 依赖: rdflib
 """
 from typing import List, Dict, Optional
-from rdflib import Graph, Literal, URIRef, Namespace, RDF, RDFS, OWL
+from rdflib import Graph, Literal, URIRef, Namespace, BNode, RDF, RDFS, OWL
 from rdflib.namespace import XSD
 
 
@@ -131,6 +131,140 @@ def ttl_to_triples(ttl_content: str) -> Dict:
         "triples": triples,
         "entities": sorted(entity_set),
         "stats": stats,
+    }
+
+
+def ttl_to_schema(ttl_content: str) -> Dict:
+    """解析 OWL/Turtle 本体 → 与 parse_dsl 同构的 {namespace, entities, relations}
+
+    用于把 Protégé 导出的 TTL 本体自动转换成「实体-关系-实体」Schema 约束。
+    提取 owl:ObjectProperty 的 (domain -> range) 作为关系，
+    rdfs:label 作为中文关系名 / 实体名。
+
+    Returns: {"namespace": str, "entities": [...], "relations": [...]}
+      relations 项: {subject_type, subject_label, predicate, predicate_label, object_type, object_label}
+    """
+    g = Graph()
+    g.parse(data=ttl_content, format="turtle")
+
+    # 本体命名空间（默认前缀 : 对应的 base）
+    ontology_ns = None
+    for pfx, ns in g.namespaces():
+        if pfx == "":  # 默认前缀 :
+            ontology_ns = str(ns)
+            break
+    if not ontology_ns:
+        for pfx, ns in g.namespaces():
+            s = str(ns)
+            if s.startswith("http"):
+                ontology_ns = s
+                break
+    if ontology_ns and ontology_ns.endswith("#"):
+        ontology_ns = ontology_ns[:-1]
+
+    EXTERNAL = {
+        "http://www.w3.org/2002/07/owl",
+        "http://www.w3.org/2000/01/rdf-schema",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns",
+        "http://www.w3.org/2001/XMLSchema",
+        "http://purl.org/dc/elements/1.1",
+    }
+
+    def to_local(uri):
+        """URI → 本体内的本地名；外部词汇（owl:/rdfs:/xsd:/dc:）返回 None"""
+        s = str(uri)
+        for ns in EXTERNAL:
+            if s.startswith(ns):
+                return None
+        if ontology_ns and s.startswith(ontology_ns):
+            tail = s[len(ontology_ns):]
+            return tail.lstrip("#/") or None
+        for sep in ("#", "/"):
+            if sep in s:
+                return s.rsplit(sep, 1)[-1] or None
+        return None
+
+    # 实体标签（owl:Class / rdfs:Class + rdfs:label）
+    class_labels = {}
+    for cls in g.subjects(RDF.type, OWL.Class):
+        lbl = g.value(cls, RDFS.label)
+        if lbl:
+            class_labels[str(cls)] = str(lbl)
+    for cls in g.subjects(RDF.type, RDFS.Class):
+        lbl = g.value(cls, RDFS.label)
+        if lbl:
+            class_labels[str(cls)] = str(lbl)
+
+    def expand(node):
+        """展开 owl:unionOf 的 BNode 为成员列表；普通 URI 直接返回"""
+        if isinstance(node, BNode):
+            u = g.value(node, OWL.unionOf)
+            if u is not None:
+                return [m for m in g.items(u)]
+        return [node]
+
+    relations = []
+    seen = set()
+    for prop in g.subjects(RDF.type, OWL.ObjectProperty):
+        pname = to_local(prop)
+        if not pname:
+            continue
+        plabel = g.value(prop, RDFS.label)
+        plabel = str(plabel) if plabel else pname
+
+        domains = list(g.objects(prop, RDFS.domain))
+        ranges = list(g.objects(prop, RDFS.range))
+        if not domains or not ranges:
+            continue
+
+        dom_targets = []
+        for d in domains:
+            dom_targets += expand(d)
+        rng_targets = []
+        for r in ranges:
+            rng_targets += expand(r)
+
+        for dt in dom_targets:
+            subj = to_local(dt)
+            if not subj:
+                continue
+            for rt in rng_targets:
+                obj = to_local(rt)
+                if not obj:
+                    continue
+                key = (subj, pname, obj)
+                if key in seen:
+                    continue
+                seen.add(key)
+                relations.append({
+                    "subject_type": subj,
+                    "subject_label": class_labels.get(str(dt)) or subj,
+                    "predicate": pname,
+                    "predicate_label": plabel,
+                    "object_type": obj,
+                    "object_label": class_labels.get(str(rt)) or obj,
+                })
+
+    # 实体集合（用于 namespace / 计数）
+    entities = []
+    seen_ent = set()
+    for uri, lbl in class_labels.items():
+        nm = to_local(uri)
+        if not nm or nm in seen_ent:
+            continue
+        seen_ent.add(nm)
+        entities.append({"name": nm, "label": lbl})
+
+    ns_name = ""
+    for pfx, ns in g.namespaces():
+        if pfx == "":
+            ns_name = str(ns).rstrip("#/").rsplit("/", 1)[-1]
+            break
+
+    return {
+        "namespace": ns_name or "ontology",
+        "entities": entities,
+        "relations": relations,
     }
 
 

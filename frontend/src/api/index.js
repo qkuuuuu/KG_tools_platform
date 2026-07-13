@@ -168,7 +168,13 @@ export const fusionApi = {
 export const exportApi = {
   export: (projectId, format) => api.get(`/export/${projectId}?format=${format}`, { responseType: 'blob' }),
   neo4jSync: (projectId) => api.post(`/export/${projectId}/neo4j-sync`),
-  importTtl: (projectId, ttlContent) => api.post(`/export/${projectId}/import-ttl`, { ttl_content: ttlContent }),
+  importTtl: (projectId, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post(`/export/${projectId}/import-ttl`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
   graphData: (projectId) => api.get(`/export/${projectId}/graph-data`),
 }
 

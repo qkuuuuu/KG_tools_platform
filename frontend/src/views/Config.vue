@@ -140,15 +140,22 @@
             <el-button @click="showTtlImport = !showTtlImport">导入 TTL</el-button>
           </div>
           <div v-if="showTtlImport">
-            <el-input
-              v-model="ttlContent"
-              type="textarea"
-              :rows="16"
-              placeholder="粘贴 Protégé 导出的 TTL 内容..."
-              style="font-family: monospace; font-size: 13px;"
-            />
+            <el-upload
+              :auto-upload="false"
+              :show-file-list="true"
+              :limit="1"
+              accept=".ttl,.txt"
+              drag
+              :on-change="onTtlFileChange"
+              :on-remove="() => (ttlFile = null)"
+            >
+              <el-button type="primary" size="small">选择 TTL 文件</el-button>
+              <template #tip>
+                <div class="el-upload__tip">上传 Protégé 导出的 .ttl 本体文件，后台自动解析为「实体-关系-实体」约束</div>
+              </template>
+            </el-upload>
             <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
-              <el-button type="primary" size="small" @click="importTtl" :loading="ttlImporting">确认导入</el-button>
+              <el-button type="primary" size="small" @click="importTtl" :loading="ttlImporting" :disabled="!ttlFile">确认导入</el-button>
               <span v-if="ttlResult" style="color: #27ae60;">{{ ttlResult }}</span>
             </div>
           </div>
@@ -216,7 +223,7 @@ let editIndex = -1
 
 // TTL
 const showTtlImport = ref(false)
-const ttlContent = ref('')
+const ttlFile = ref(null)
 const ttlImporting = ref(false)
 const ttlResult = ref('')
 
@@ -492,15 +499,25 @@ async function exportTtl() {
   }
 }
 
+function onTtlFileChange(file) {
+  const raw = file.raw
+  if (!raw) return
+  if (!/\.(ttl|txt)$/i.test(raw.name)) {
+    ElMessage.warning('请选择 .ttl 或 .txt 本体文件')
+    return
+  }
+  ttlFile.value = raw
+}
+
 async function importTtl() {
-  if (!ttlContent.value.trim()) {
-    ElMessage.warning('请粘贴 TTL 内容')
+  if (!ttlFile.value) {
+    ElMessage.warning('请先选择 TTL 文件')
     return
   }
   ttlImporting.value = true
   try {
-    const res = await exportApi.importTtl(projectId, ttlContent.value)
-    ttlResult.value = res.message || `导入 ${res.triples_imported || 0} 条`
+    const res = await exportApi.importTtl(projectId, ttlFile.value)
+    ttlResult.value = res.message || `导入 ${res.relations_imported || 0} 条关系约束`
     ElMessage.success('TTL 导入成功')
     await loadSchemas()
   } catch (e) {

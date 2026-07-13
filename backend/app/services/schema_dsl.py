@@ -18,7 +18,9 @@
             描述(description): Text
 """
 import re
+import uuid
 from typing import List, Dict, Any
+from app.models import SchemaConstraint
 
 
 def parse_dsl(dsl: str) -> Dict[str, Any]:
@@ -144,6 +146,28 @@ def parse_dsl(dsl: str) -> Dict[str, Any]:
         "entities": entities,
         "relations": relations,
     }
+
+
+def save_schema_constraints(db, project_id, relations):
+    """写入 schema_constraints：先清空本项目旧约束再写入（与 import-dsl 一致）。
+
+    relations 项需含: subject_type / predicate / object_type
+    以及可选中文标签 subject_label / predicate_label / object_label。
+    DSL 导入与 TTL 导入共用此函数，保证两路行为一致。
+    """
+    db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).delete()
+    for rel in relations:
+        db.add(SchemaConstraint(
+            id=uuid.uuid4(),
+            project_id=project_id,
+            subject_type=rel.get("subject_type", ""),
+            predicate=rel.get("predicate", ""),
+            object_type=rel.get("object_type", ""),
+            subject_label=rel.get("subject_label"),
+            predicate_label=rel.get("predicate_label"),
+            object_label=rel.get("object_label"),
+        ))
+    db.commit()
 
 
 if __name__ == "__main__":

@@ -75,17 +75,5 @@ async def import_dsl(project_id: UUID, body: dict, db: Session = Depends(get_db)
     result = _dsl_service.parse_dsl(body.get("dsl", ""))
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
-    db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).delete()
-    for rel in result["relations"]:
-        db.add(SchemaConstraint(
-            id=uuid.uuid4(),
-            project_id=project_id,
-            subject_type=rel["subject_type"],
-            predicate=rel["predicate"],
-            object_type=rel["object_type"],
-            subject_label=rel.get("subject_label"),
-            predicate_label=rel.get("predicate_label"),
-            object_label=rel.get("object_label"),
-        ))
-    db.commit()
+    _dsl_service.save_schema_constraints(db, project_id, result["relations"])
     return {"namespace": result["namespace"], "entities_count": len(result["entities"]), "relations_count": len(result["relations"])}
