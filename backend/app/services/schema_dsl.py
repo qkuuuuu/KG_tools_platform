@@ -105,12 +105,15 @@ def parse_dsl(dsl: str) -> Dict[str, Any]:
                 current["relations"].append(
                     {"name": item_name, "label": item_label, "target": item_type}
                 )
+                object_label = entity_map.get(item_type, {}).get("label", item_type)
                 relations.append(
                     {
                         "subject_type": current["name"],
+                        "subject_label": current["label"],
                         "predicate": item_name,
                         "predicate_label": item_label,
                         "object_type": item_type,
+                        "object_label": object_label,
                     }
                 )
                 if item_type not in entity_map:

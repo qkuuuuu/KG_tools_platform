@@ -101,7 +101,14 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
             schemas = db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).all()
 
         schema_list = [
-            {"subject_type": s.subject_type, "predicate": s.predicate, "object_type": s.object_type}
+            {
+                "subject_type": s.subject_type,
+                "subject_label": getattr(s, "subject_label", None) or s.subject_type,
+                "predicate": s.predicate,
+                "predicate_label": getattr(s, "predicate_label", None) or s.predicate,
+                "object_type": s.object_type,
+                "object_label": getattr(s, "object_label", None) or s.object_type,
+            }
             for s in schemas
         ]
 
@@ -188,6 +195,44 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
                 }
             db.commit()
             _broadcast(project_id, task_id, "EXTRACT", "DONE", 100, task.result if task else None)
+
+            # ===== 自动质检：若已配置 VERIFICATION 阶段 LLM，抽取完成后自动跑质检 =====
+            try:
+                qcfg = get_llm_config_for_project(db, project_id, "VERIFICATION")
+                if qcfg:
+                    print(f"[AUTO-QUALITY] 检测到 VERIFICATION LLM 配置，自动执行质检 doc_id={doc_id}")
+                    just_written = db.query(TripleRaw).filter(
+                        TripleRaw.doc_id == doc_id,
+                        TripleRaw.task_id == task_id,
+                        TripleRaw.status == "PENDING",
+                    ).all()
+                    if just_written:
+                        q_threshold = settings.CONFIDENCE_THRESHOLD
+                        q_triples = [
+                            {"subject": t.subject, "predicate": t.predicate,
+                             "object": t.object, "confidence": t.llm_confidence}
+                            for t in just_written
+                        ]
+                        q_checked = llm_quality_review(
+                            q_triples, doc.md_content or "", qcfg, q_threshold
+                        )
+                        q_passed = 0
+                        for t, check in zip(just_written, q_checked):
+                            score = check.get("quality_score", t.llm_confidence or 50.0)
+                            t.llm_confidence = score
+                            verdict = check.get("verdict", "")
+                            if verdict == "PASS" or score >= q_threshold:
+                                t.status = "PASSED"
+                                q_passed += 1
+                            elif verdict == "REJECT":
+                                t.status = "REJECTED"
+                            # UNCERTAIN: 保持 PENDING
+                        db.commit()
+                        print(f"[AUTO-QUALITY] 完成: 共 {len(just_written)} 条, 通过 {q_passed} 条")
+            except Exception as qe:
+                import traceback as _tb
+                _tb.print_exc()
+                print(f"[AUTO-QUALITY] 自动质检失败(不影响抽取结果): {qe}")
         except Exception as e:
             import traceback
             traceback.print_exc()

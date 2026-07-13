@@ -56,6 +56,10 @@ class SchemaConstraint(Base):
     subject_type = Column(String(100), nullable=False)
     predicate = Column(String(100), nullable=False)
     object_type = Column(String(100), nullable=False)
+    # 中文标签（DSL 导入时一并持久化，避免抽取结果中英混排）
+    subject_label = Column(String(200))
+    predicate_label = Column(String(200))
+    object_label = Column(String(200))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="schemas")

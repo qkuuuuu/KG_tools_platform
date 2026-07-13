@@ -79,6 +79,20 @@ class Settings(BaseSettings):
     FUSION_AUTO_THRESHOLD: float = 95.0
     FUSION_MANUAL_THRESHOLD: float = 80.0
 
+    # 启发式关系配对（实体标签组合+共现硬凑）是否启用。
+    # False 时：NER 引擎(UIE/DeepKE/GLiNER)只产出模型真实关系，不再注水。
+    ALLOW_HEURISTIC_RELATIONS: bool = os.environ.get(
+        "KG_ALLOW_HEURISTIC_RELATIONS", "true"
+    ).lower() in ("1", "true", "yes", "on")
+
+    # LLM 抽取后是否做确定性事实核查（主语/宾语须出现在原文 chunk 中）
+    LLM_FACT_CHECK: bool = os.environ.get(
+        "KG_LLM_FACT_CHECK", "true"
+    ).lower() in ("1", "true", "yes", "on")
+
+    # 启发式关系三元组被压低的置信度
+    HEURISTIC_CONFIDENCE: float = 30.0
+
     class Config:
         env_file = ".env"
 

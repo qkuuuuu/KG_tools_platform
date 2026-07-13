@@ -5,6 +5,7 @@
 import json
 import re
 from typing import List, Dict, Optional
+from app.config import settings
 
 
 def _call_llm(cfg: Dict, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:
@@ -79,7 +80,7 @@ def extract_with_llm(
         schema_display_note = ""
 
     schema_desc = "\n".join(
-        f"- {s['subject_type']} --[{s['predicate']}]--> {s['object_type']}"
+        f"- {s.get('subject_label') or s['subject_type']} --[{s.get('predicate_label') or s['predicate']}]--> {s.get('object_label') or s['object_type']}"
         for s in schema_display
     ) if schema_display else "（无 Schema 约束，自由抽取实体及关系）"
 
@@ -133,6 +134,15 @@ Schema 约束（只抽取符合以下模式的关系）：
             triples = _parse_triples_from_response(response)
 
             for t in triples:
+                # 事实核查：主语/宾语必须确定性出现在原文 chunk 中，
+                # 否则视为幻觉三元组，丢弃（避免编造入库）。
+                if settings.LLM_FACT_CHECK:
+                    subj = (t.get("subject") or "").strip().strip('"').strip("'")
+                    obj = (t.get("object") or "").strip().strip('"').strip("'")
+                    if not subj or not obj:
+                        continue
+                    if subj not in chunk or obj not in chunk:
+                        continue
                 key = f"{t.get('subject','')}|{t.get('predicate','')}|{t.get('object','')}"
                 if key not in seen_keys:
                     seen_keys.add(key)

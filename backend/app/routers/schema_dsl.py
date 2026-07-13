@@ -68,7 +68,7 @@ async def import_dsl(
     # 先删除该项目旧关系约束
     db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).delete()
 
-    # 为每个关系创建 SchemaConstraint
+    # 为每个关系创建 SchemaConstraint（同时持久化中文标签，避免抽取结果中英混排）
     count = 0
     for rel in result["relations"]:
         db.add(SchemaConstraint(
@@ -77,6 +77,9 @@ async def import_dsl(
             subject_type=rel["subject_type"],
             predicate=rel["predicate"],
             object_type=rel["object_type"],
+            subject_label=rel.get("subject_label"),
+            predicate_label=rel.get("predicate_label"),
+            object_label=rel.get("object_label"),
         ))
         count += 1
 

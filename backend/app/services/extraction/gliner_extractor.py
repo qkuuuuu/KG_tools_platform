@@ -16,6 +16,7 @@
 import re
 import traceback
 from typing import List, Dict, Optional, Any
+from app.config import settings
 
 # 延迟导入标志
 _GLINER_AVAILABLE = None
@@ -54,6 +55,11 @@ def extract_with_gliner(
         三元组列表
     """
     if not md_content or not md_content.strip():
+        return []
+
+    # GLiNER 仅做 NER，关系全部来自启发式配对（注水）。
+    # 关闭 ALLOW_HEURISTIC_RELATIONS 时，不编造任何关系，直接返回空。
+    if not settings.ALLOW_HEURISTIC_RELATIONS:
         return []
 
     # 从 Schema 提取实体类型 → GLiNER labels
@@ -98,12 +104,11 @@ def _extract_labels_from_schemas(schemas: List[Dict]) -> List[str]:
     """
     label_set = set()
     for s in schemas:
-        subj = s.get("subject_type", "")
-        obj = s.get("object_type", "")
-        if subj:
-            label_set.add(subj)
-        if obj:
-            label_set.add(obj)
+        # 同时加入英文标识符与中文标签，提升 GLiNER 实体召回与对齐
+        for key in ("subject_type", "subject_label", "object_type", "object_label"):
+            v = s.get(key, "")
+            if v:
+                label_set.add(v)
     
     # 如果提取不到有意义的标签, 就用默认集
     if not label_set:
@@ -206,7 +211,7 @@ def _spacy_fallback(
             for ent in doc.ents if len(ent.text) >= 2
         ]
         
-        triples = _pair_entities(entities, schemas, text, 80.0)
+        triples = _pair_entities(entities, schemas, text, 80.0, method="GLINER_SPACY")
         return triples
     
     except Exception:
@@ -240,7 +245,7 @@ def _rule_fallback(text: str) -> List[Dict]:
                 "predicate": predicate,
                 "object": value,
                 "confidence": None,
-                "extraction_method": "GLINER",
+                "extraction_method": "GLINER_RULE",
                 "chunk": text[max(0, m.start() - 50):m.end() + 50][:500],
             })
     
@@ -248,7 +253,8 @@ def _rule_fallback(text: str) -> List[Dict]:
 
 
 def _pair_entities(
-    entities: List[Dict], schemas: List[Dict], text: str, base_confidence: float
+    entities: List[Dict], schemas: List[Dict], text: str,
+    base_confidence: float = 0.0, method: str = "GLINER_HEURISTIC",
 ) -> List[Dict]:
     """实体配对: 共现窗口 + Schema 约束
     
@@ -259,16 +265,29 @@ def _pair_entities(
     
     triples = []
     
-    # 构建 Schema 标签映射: (subj_label, obj_label) → predicate
-    # 使用精确匹配，不做 .lower() 转换
+    # 构建 Schema 标签映射: (subj_label, obj_label) → (predicate, predicate_label)
+    # 同时注册英文标识符与中文标签两种 key，兼容不同 NER 输出
     schema_label_map = {}
+    schema_pred_label_map = {}
     for s in schemas:
         subj_type = s.get("subject_type", "")
         obj_type = s.get("object_type", "")
+        subj_label = s.get("subject_label", "") or subj_type
+        obj_label = s.get("object_label", "") or obj_type
         pred = s.get("predicate", "关联")
-        key = (subj_type, obj_type)
-        if key not in schema_label_map:
-            schema_label_map[key] = pred
+        pred_label = s.get("predicate_label", "") or pred
+        key_pairs = [
+            (subj_type, obj_type),
+            (subj_label, obj_label),
+            (subj_label, obj_type),
+            (subj_type, obj_label),
+        ]
+        for k in key_pairs:
+            if not k[0] or not k[1]:
+                continue
+            if k not in schema_label_map:
+                schema_label_map[k] = pred
+                schema_pred_label_map[k] = pred_label
     
     for i, subj in enumerate(entities):
         for j, obj in enumerate(entities):
@@ -286,6 +305,11 @@ def _pair_entities(
             if not predicate:
                 continue  # 不在 Schema 约束内，跳过
             
+            # 优先使用中文谓词（predicate_label），避免中英混排
+            out_predicate = schema_pred_label_map.get((subj_label, obj_label)) \
+                or schema_pred_label_map.get((obj_label, subj_label)) \
+                or predicate
+            
             chunk_start = text.find(subj["text"])
             chunk_end = text.find(obj["text"])
             if chunk_start >= 0 and chunk_end >= 0:
@@ -295,10 +319,10 @@ def _pair_entities(
             
             triples.append({
                 "subject": subj["text"],
-                "predicate": predicate,
+                "predicate": out_predicate,
                 "object": obj["text"],
-                "confidence": None,
-                "extraction_method": "GLINER",
+                "confidence": settings.HEURISTIC_CONFIDENCE,
+                "extraction_method": method,
                 "chunk": s[:500],
             })
     

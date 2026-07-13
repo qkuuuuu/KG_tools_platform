@@ -16,6 +16,7 @@ GitHub: https://github.com/PaddlePaddle/PaddleNLP
 import re
 import traceback
 from typing import List, Dict, Optional, Any
+from app.config import settings
 
 
 # Taskflow 缓存，避免重复加载模型
@@ -199,9 +200,10 @@ def _uie_taskflow_extract(
     # ---- 3. 合并实体关系和纯实体配对 ----
     triples = _merge_entity_relation_results(flat_entities, flat_relations, schemas, text)
 
-    # 标记抽取方法
+    # 标记抽取方法（仅补全缺失的，保留启发式 UIE_HEURISTIC 标记）
     for t in triples:
-        t["extraction_method"] = "UIE"
+        if "extraction_method" not in t:
+            t["extraction_method"] = "UIE"
 
     print(f"[UIE] 最终抽取三元组: {len(triples)} 条")
     return triples
@@ -210,12 +212,13 @@ def _uie_taskflow_extract(
 def _collect_entity_types(schemas: List[Dict]) -> List[str]:
     """从 Schema 提取唯一实体类型集
 
-    确保正确提取所有 subject_type 和 object_type
+    优先使用中文标签（subject_label/object_label），
+    缺失时回退到 _to_cn 的英文→中文映射。
     """
     types = set()
     for s in schemas:
-        st = _to_cn(s.get("subject_type", ""))
-        ot = _to_cn(s.get("object_type", ""))
+        st = s.get("subject_label") or _to_cn(s.get("subject_type", ""))
+        ot = s.get("object_label") or _to_cn(s.get("object_type", ""))
         if st:
             types.add(st)
         if ot:
@@ -235,12 +238,12 @@ def _build_relation_schema(schemas: List[Dict]) -> List[Dict]:
     """
     from collections import defaultdict
 
-    # 按 subject_type 分组
+    # 按 subject_type 分组（优先中文标签）
     grouped = defaultdict(list)
     for s in schemas:
-        st = _to_cn(s.get("subject_type", ""))
-        pred = s.get("predicate", "")
-        ot = _to_cn(s.get("object_type", ""))
+        st = s.get("subject_label") or _to_cn(s.get("subject_type", ""))
+        pred = s.get("predicate_label") or s.get("predicate", "")
+        ot = s.get("object_label") or _to_cn(s.get("object_type", ""))
         if st and pred and ot:
             grouped[st].append({
                 "relation": pred,
@@ -266,7 +269,9 @@ def _merge_entity_relation_results(
 ) -> List[Dict]:
     """合并实体抽取和关系抽取结果 → 三元组
 
-    优先级: 关系抽取结果 > 实体配对结果
+    优先级: 关系抽取结果(模型真实关系) > 实体配对结果(启发式注水)
+    启发式配对仅在 ALLOW_HEURISTIC_RELATIONS=True 时进行，
+    并单独标记为 UIE_HEURISTIC 且压低置信度，便于下游区分与过滤。
     """
     triples = []
 
@@ -274,7 +279,7 @@ def _merge_entity_relation_results(
         print("[UIE] 警告: schemas 为空, 无法配对")
         return []
 
-    # ---- 1. 优先使用关系抽取结果 ----
+    # ---- 1. 优先使用关系抽取结果 (模型真实关系，始终保留) ----
     seen_keys = set()
     for rel in relations:
         key = (rel["subject"], rel["predicate"], rel["object"])
@@ -285,81 +290,90 @@ def _merge_entity_relation_results(
                 "predicate": rel["predicate"],
                 "object": rel["object"],
                 "confidence": None,
+                "extraction_method": "UIE",
                 "chunk": rel.get("chunk", full_text[:500]),
             })
 
-    # ---- 2. 实体配对补全 (关系抽取未覆盖的三元组) ----
-    for schema_item in schemas:
-        subj_type_cn = _to_cn(schema_item.get("subject_type", ""))
-        obj_type_cn = _to_cn(schema_item.get("object_type", ""))
-        predicate = schema_item.get("predicate", "")
+    # ---- 2 & 3. 启发式实体配对 (注水) ----
+    if settings.ALLOW_HEURISTIC_RELATIONS:
+        # ---- 2. 实体配对补全 (关系抽取未覆盖的三元组) ----
+        for schema_item in schemas:
+            subj_type_cn = schema_item.get("subject_label") or _to_cn(schema_item.get("subject_type", ""))
+            obj_type_cn = schema_item.get("object_label") or _to_cn(schema_item.get("object_type", ""))
+            predicate = schema_item.get("predicate_label") or schema_item.get("predicate", "")
 
-        subj_candidates = [e for e in entities if e["label"] == subj_type_cn]
-        obj_candidates = [e for e in entities if e["label"] == obj_type_cn]
+            subj_candidates = [e for e in entities if e["label"] == subj_type_cn]
+            obj_candidates = [e for e in entities if e["label"] == obj_type_cn]
 
-        for subj in subj_candidates:
-            for obj in obj_candidates:
-                if subj["text"] == obj["text"]:
-                    continue  # 不抽自环
+            for subj in subj_candidates:
+                for obj in obj_candidates:
+                    if subj["text"] == obj["text"]:
+                        continue  # 不抽自环
 
-                key = (subj["text"], predicate, obj["text"])
-                if key in seen_keys:
-                    continue  # 已通过关系抽取产出
+                    key = (subj["text"], predicate, obj["text"])
+                    if key in seen_keys:
+                        continue  # 已通过关系抽取产出
 
-                # 共现检查
-                subj_positions = _find_all_positions(full_text, subj["text"])
-                obj_positions = _find_all_positions(full_text, obj["text"])
+                    # 共现检查
+                    subj_positions = _find_all_positions(full_text, subj["text"])
+                    obj_positions = _find_all_positions(full_text, obj["text"])
 
-                if not subj_positions or not obj_positions:
-                    continue
+                    if not subj_positions or not obj_positions:
+                        continue
 
-                # 找最近距离
-                min_dist = float('inf')
-                best_sp = subj_positions[0]
-                best_op = obj_positions[0]
-                for sp in subj_positions:
-                    for op in obj_positions:
-                        d = abs(sp - op)
-                        if d < min_dist:
-                            min_dist = d
-                            best_sp = sp
-                            best_op = op
+                    # 找最近距离
+                    min_dist = float('inf')
+                    best_sp = subj_positions[0]
+                    best_op = obj_positions[0]
+                    for sp in subj_positions:
+                        for op in obj_positions:
+                            d = abs(sp - op)
+                            if d < min_dist:
+                                min_dist = d
+                                best_sp = sp
+                                best_op = op
 
-                if min_dist > 800:
-                    continue
+                    if min_dist > 800:
+                        continue
 
-                seen_keys.add(key)
-                triples.append({
-                    "subject": subj["text"],
-                    "predicate": predicate,
-                    "object": obj["text"],
-                    "confidence": None,
-                    "chunk": full_text[max(0, min(best_sp, best_op) - 100):min(len(full_text), max(best_sp, best_op) + 200)],
-                })
+                    seen_keys.add(key)
+                    triples.append({
+                        "subject": subj["text"],
+                        "predicate": predicate,
+                        "object": obj["text"],
+                        "confidence": settings.HEURISTIC_CONFIDENCE,
+                        "extraction_method": "UIE_HEURISTIC",
+                        "chunk": full_text[max(0, min(best_sp, best_op) - 100):min(len(full_text), max(best_sp, best_op) + 200)],
+                    })
 
-    # ---- 3. 降级: 没有关系抽取结果时，做宽松配对 ----
-    if not triples and len(entities) >= 2:
-        for i in range(len(entities)):
-            for j in range(i + 1, len(entities)):
-                subj = entities[i]
-                obj = entities[j]
-                if subj["text"] == obj["text"]:
-                    continue
+        # ---- 3. 降级: 没有关系抽取结果时，做宽松配对 ----
+        if not any(t["extraction_method"] == "UIE" for t in triples) and len(entities) >= 2:
+            for i in range(len(entities)):
+                for j in range(i + 1, len(entities)):
+                    subj = entities[i]
+                    obj = entities[j]
+                    if subj["text"] == obj["text"]:
+                        continue
 
-                # 找匹配的 schema
-                for s in schemas:
-                    st_cn = _to_cn(s.get("subject_type", ""))
-                    ot_cn = _to_cn(s.get("object_type", ""))
-                    pred = s.get("predicate", "relatedTo")
-                    if subj["label"] == st_cn and obj["label"] == ot_cn:
-                        triples.append({
-                            "subject": subj["text"],
-                            "predicate": pred,
-                            "object": obj["text"],
-                            "confidence": None,
-                            "chunk": full_text[:500],
-                        })
-                        break
+                    # 找匹配的 schema
+                    for s in schemas:
+                        st_cn = s.get("subject_label") or _to_cn(s.get("subject_type", ""))
+                        ot_cn = s.get("object_label") or _to_cn(s.get("object_type", ""))
+                        pred = s.get("predicate_label") or s.get("predicate", "relatedTo")
+                        if subj["label"] == st_cn and obj["label"] == ot_cn:
+                            key = (subj["text"], pred, obj["text"])
+                            if key in seen_keys:
+                                break
+                            seen_keys.add(key)
+                            triples.append({
+                                "subject": subj["text"],
+                                "predicate": pred,
+                                "object": obj["text"],
+                                "confidence": settings.HEURISTIC_CONFIDENCE,
+                                "extraction_method": "UIE_HEURISTIC",
+                                "chunk": full_text[:500],
+                            })
+                            break
 
     return triples
 

@@ -13,6 +13,7 @@ import re
 import traceback
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
+from app.config import settings
 
 
 # ModelScope 管道缓存
@@ -171,20 +172,42 @@ def _map_ner_label(label: str) -> str:
 def _pair_entities_with_schema(
     entities: List[Dict], schemas: List[Dict], full_text: str
 ) -> List[Dict]:
-    """实体配对: Schema 约束 + 共现窗口"""
+    """实体配对: Schema 约束 + 共现窗口
+
+    注意: DeepKE(RaNER) 仅做 NER，不抽取关系。
+    此处所有关系均为「实体标签组合 + 共现窗口」启发式配对（注水），
+    因此统一标记为 DEEPKE_HEURISTIC 并压低置信度；
+    当 ALLOW_HEURISTIC_RELATIONS=False 时直接返回空（不编造关系）。
+    """
+    if not settings.ALLOW_HEURISTIC_RELATIONS:
+        return []
     if len(entities) < 2:
         return []
     
     triples = []
     
-    # 构建 Schema 标签映射
+    # 构建 Schema 标签映射: 同时注册 (英文标识符, 中文标签) 两种 key
     schema_pairs = {}
+    schema_pred_label = {}
     for s in schemas:
-        subj_type = s.get("subject_type", "")
-        obj_type = s.get("object_type", "")
+        subj_type = (s.get("subject_type", "") or "").lower()
+        obj_type = (s.get("object_type", "") or "").lower()
+        subj_label = (s.get("subject_label", "") or s.get("subject_type", "") or "").lower()
+        obj_label = (s.get("object_label", "") or s.get("object_type", "") or "").lower()
         pred = s.get("predicate", "relatedTo")
-        key = (subj_type.lower(), obj_type.lower())
-        schema_pairs[key] = pred
+        pred_label = s.get("predicate_label", "") or pred
+        key_pairs = [
+            (subj_type, obj_type),
+            (subj_label, obj_label),
+            (subj_label, obj_type),
+            (subj_type, obj_label),
+        ]
+        for k in key_pairs:
+            if not k[0] or not k[1]:
+                continue
+            if k not in schema_pairs:
+                schema_pairs[k] = pred
+                schema_pred_label[k] = pred_label
     
     for i, subj in enumerate(entities):
         for j, obj in enumerate(entities):
@@ -217,6 +240,13 @@ def _pair_entities_with_schema(
             if not predicate:
                 continue  # 不在 Schema 约束内，跳过
             
+            # 优先使用中文谓词（predicate_label），避免中英混排
+            out_predicate = schema_pred_label.get(
+                (subj_label.lower(), obj_label.lower())
+            ) or schema_pred_label.get(
+                (obj_label.lower(), subj_label.lower())
+            ) or predicate
+            
             # 检查共现: 在原文中所有出现位置找最近距离
             subj_positions = _find_all_positions(full_text, subj["text"])
             obj_positions = _find_all_positions(full_text, obj["text"])
@@ -243,10 +273,10 @@ def _pair_entities_with_schema(
             
             triples.append({
                 "subject": subj["text"],
-                "predicate": predicate,
+                "predicate": out_predicate,
                 "object": obj["text"],
-                "confidence": None,
-                "extraction_method": "DEEPKE",
+                "confidence": settings.HEURISTIC_CONFIDENCE,
+                "extraction_method": "DEEPKE_HEURISTIC",
                 "chunk": chunk[:500],
             })
     
