@@ -34,7 +34,7 @@ KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从�
 | 层级 | 技术 |
 |------|------|
 | 前端 | Vue 3 + Element Plus + Pinia + AntV G6 |
-| 后端 | FastAPI + SQLAlchemy + Alembic + JWT + bcrypt |
+| 后端 | FastAPI + SQLAlchemy + JWT + bcrypt |
 | AI 集成 | LangChain / OpenAI / Anthropic SDK |
 | 数据库 | PostgreSQL 16 + Neo4j 5（可选） |
 | 容器 | Docker + Docker Compose |
@@ -110,7 +110,7 @@ kg-platform/
 ├── backend/                  # FastAPI 后端
 │   ├── Dockerfile
 │   ├── entrypoint.sh         # 启动脚本：等待DB → 建表 → 启动
-│   ├── init_db.py            # 初始化表结构 + 默认管理员
+│   ├── init_db.py            # 由 SQLAlchemy 模型自动建表(create_all) + 默认管理员
 │   ├── requirements.txt
 │   └── app/
 │       ├── api/v1/endpoints/ # 业务接口
@@ -131,6 +131,9 @@ kg-platform/
 ├── .env.example              # 环境变量模板
 └── DEPLOY.md                 # 详细服务器部署与运维指南
 ```
+
+> **表结构唯一来源**：所有表由 `backend/app/models/__init__.py` 定义，后端启动时通过 `create_all` 自动建表（`backend/init.sql` 仅做 UUID 扩展引导）。
+> 改动模型后需重置数据库使变更生效：`docker compose down -v && docker compose up -d --build`。
 
 ---
 

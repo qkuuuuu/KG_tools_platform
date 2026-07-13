@@ -8,7 +8,7 @@ from uuid import UUID
 from app.database import get_db
 from app.models import Project, User, Document
 from app.schemas import ProjectCreate, ProjectResponse
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ async def update_project(project_id: UUID, body: ProjectCreate, db: Session = De
 
 
 @router.delete("/{project_id}")
-async def delete_project(project_id: UUID, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+async def delete_project(project_id: UUID, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")

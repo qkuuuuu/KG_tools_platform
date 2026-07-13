@@ -7,7 +7,7 @@ from app.database import get_db
 from datetime import datetime, timezone
 from app.models import TripleRaw, AuditLog, User
 from app.schemas import TripleResponse, ReviewRequest
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, require_admin
 
 router = APIRouter()
 
@@ -179,7 +179,7 @@ async def revoke_review(
 async def delete_triple(
     triple_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     """彻底删除三元组"""
     triple = db.query(TripleRaw).filter(TripleRaw.id == triple_id).first()

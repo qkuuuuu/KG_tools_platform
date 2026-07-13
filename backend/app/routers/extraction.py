@@ -438,7 +438,7 @@ async def get_project_triples(
 async def delete_document(
     doc_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     """删除文档解析任务：删除 Document + 关联 TaskStatus + 关联 TripleRaw（级联）"""
     doc = db.query(Document).filter(Document.id == doc_id).first()
@@ -462,7 +462,7 @@ async def delete_document(
 async def delete_extract_task(
     task_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     """删除抽取任务：同时删除该任务产出的三元组
     
@@ -516,7 +516,7 @@ async def delete_extract_task(
 async def delete_quality_task(
     task_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     """删除质检任务：仅删除 TaskStatus 记录"""
     task = db.query(TaskStatus).filter(TaskStatus.id == task_id).first()
@@ -531,7 +531,7 @@ async def delete_quality_task(
 async def delete_triple(
     triple_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     """删除单条三元组"""
     triple = db.query(TripleRaw).filter(TripleRaw.id == triple_id).first()

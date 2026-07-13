@@ -34,6 +34,9 @@ class User(Base):
 
 class LLMConfig(Base):
     __tablename__ = "llm_configs"
+    __table_args__ = (
+        Index("ix_llm_configs_project_stage", "project_id", "pipeline_stage"),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
     pipeline_stage = Column(String(30), nullable=False)
@@ -60,6 +63,9 @@ class SchemaConstraint(Base):
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_project", "project_id"),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
     file_name = Column(String(500), nullable=False)
@@ -78,6 +84,7 @@ class TripleRaw(Base):
     __tablename__ = "triples_raw"
     __table_args__ = (
         Index("ix_triples_raw_project_status", "project_id", "status"),
+        Index("ix_triples_raw_doc", "doc_id"),
     )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
