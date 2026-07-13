@@ -85,7 +85,8 @@ services:
       - "8000:8000"
     volumes:
       - uploads-data:/app/uploads
-      - model-cache:/root/.cache        # 模型缓存（HuggingFace/ModelScope），重启不重下
+      # 注意: 模型已随镜像打包在 /opt/models，不要再挂卷到 /root/.cache，
+      # 否则会遮住镜像内已下载的模型。
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -96,6 +97,9 @@ services:
       resources:
         limits:
           memory: 8G
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
 
   # ---- Vue 前端 (Nginx 生产模式) ----
   frontend-app:
@@ -120,4 +124,3 @@ volumes:
   neo4j-data:
   neo4j-logs:
   uploads-data:
-  model-cache:

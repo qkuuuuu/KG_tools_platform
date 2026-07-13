@@ -5,10 +5,11 @@ import csv
 import json
 import io
 import re
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import Optional, List, Literal
 from uuid import UUID
 from app.database import get_db
 from app.models import TripleFused, EntityFused, Project, TripleRaw, User, SchemaConstraint
@@ -44,6 +45,16 @@ def _entity_group(name: str) -> str:
         return "Process"
     # 默认: 首字母大写分组（减少颜色种类）
     return name[0].upper() if name[0].isalpha() else "#"
+
+
+def _attachment(filename: str) -> str:
+    """构造 Content-Disposition 头，兼容中文等非 ASCII 文件名（RFC 5987）
+
+    同时提供 ASCII 回退名与 UTF-8 编码的 filename*，避免 Starlette 因
+    非 ASCII 头值抛出 UnicodeEncodeError -> 500。
+    """
+    ascii_name = filename.encode("ascii", "ignore").decode() or "download"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
 @router.get("/multi-project-graph")
@@ -219,7 +230,7 @@ async def get_graph_data(
 @router.get("/{project_id}")
 async def export_project(
     project_id: UUID,
-    format: str = Query(default="json", pattern="^(csv|json|cypher|jsonld|ttl)$"),
+    format: Literal["csv", "json", "cypher", "jsonld", "ttl"] = "json",
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
@@ -278,14 +289,14 @@ async def export_project(
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={project.name}_kg.csv"},
+            headers={"Content-Disposition": _attachment(f"{project.name}_kg.csv")},
         )
 
     elif format == "json":
         return Response(
             content=json.dumps(triples_data, ensure_ascii=False, indent=2),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename={project.name}_kg.json"},
+            headers={"Content-Disposition": _attachment(f"{project.name}_kg.json")},
         )
 
     elif format == "jsonld":
@@ -293,7 +304,7 @@ async def export_project(
         return Response(
             content=content,
             media_type="application/ld+json",
-            headers={"Content-Disposition": f"attachment; filename={project.name}_kg.jsonld"},
+            headers={"Content-Disposition": _attachment(f"{project.name}_kg.jsonld")},
         )
 
     elif format == "ttl":
@@ -301,7 +312,7 @@ async def export_project(
         return Response(
             content=content,
             media_type="text/turtle",
-            headers={"Content-Disposition": f"attachment; filename={project.name}_kg.ttl"},
+            headers={"Content-Disposition": _attachment(f"{project.name}_kg.ttl")},
         )
 
     else:  # cypher
@@ -309,7 +320,7 @@ async def export_project(
         return Response(
             content=content,
             media_type="text/plain",
-            headers={"Content-Disposition": f"attachment; filename={project.name}_kg.cypher"},
+            headers={"Content-Disposition": _attachment(f"{project.name}_kg.cypher")},
         )
 
 

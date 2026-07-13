@@ -186,7 +186,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ### C. 不需要改
 
 - 前端 API 地址：容器内已完成反代，无需改动。
-- `download/` 模型文件：已在 `docker-compose.yml` 配置 `HF_ENDPOINT=https://hf-mirror.com` 与 `MINERU_MODEL_SOURCE=modelscope`，首次使用时自动从国内镜像下载并缓存在 `model-cache` 卷中，无需手动复制。
+- `download/` 模型文件：PaddleOCR / UIE / GLiNER / DeepKE(RaNER) / spaCy / MinerU 的大模型已在**镜像构建期**由 `backend/predownload_models.py` 下载并打包进镜像（缓存统一位于 `/opt/models`，由 Dockerfile 的 `HOME`/`HF_HOME`/`MODELSCOPE_CACHE`/`PADDLENLP_HOME` 指定），运行时直接命中，**无需用户首次使用时联网下载**。构建期已配置 `HF_ENDPOINT=https://hf-mirror.com`、`MINERU_MODEL_SOURCE=modelscope` 走国内镜像。若某模型构建期下载失败，对应引擎会在首次使用时自动回退下载（或降级方案）。
 
 ---
 
