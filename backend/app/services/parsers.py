@@ -67,7 +67,13 @@ def parse_with_paddleocr(file_path: str) -> Tuple[str, float]:
     PaddleOCR 支持中文 OCR，可处理纯图像、扫描件、扫描版 PDF、发票等。
     安装: pip install paddlepaddle paddleocr
     """
-    from paddleocr import PaddleOCR
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError:
+        raise RuntimeError(
+            "PaddleOCR 解析引擎未部署：请执行 `pip install paddlepaddle paddleocr` 并重启服务。"
+            "首次运行会自动下载中文 OCR 模型（需联网）。"
+        )
     import fitz  # PyMuPDF 用于将 PDF 页面转为图片
 
     # 初始化 PaddleOCR（中文 + 角度分类）
@@ -134,6 +140,11 @@ def parse_with_mineru(file_path: str) -> Tuple[str, float]:
 
     通过 subprocess 调用 mineru CLI，兼容性最好。
     """
+    if shutil.which("mineru") is None:
+        raise RuntimeError(
+            "MinerU 解析引擎未部署：请执行 `pip install mineru[all]` 并重启服务。"
+            "首次运行会自动从 ModelScope 下载版面/公式/表格模型（需联网，建议设置 MINERU_MODEL_SOURCE=modelscope）。"
+        )
     output_dir = tempfile.mkdtemp(prefix="mineru_out_")
     md_content = ""
     score = 30.0

@@ -28,8 +28,14 @@ def _get_pipeline():
         return _DEEPKE_PIPELINE
     
     try:
-        from modelscope.pipelines import pipeline
-        from modelscope.utils.constant import Tasks
+        try:
+            from modelscope.pipelines import pipeline
+            from modelscope.utils.constant import Tasks
+        except ImportError:
+            raise RuntimeError(
+                "DeepKE 抽取引擎未部署：请执行 `pip install modelscope` 并重启服务。"
+                "首次运行会自动从 ModelScope 下载 RaNER 模型（需联网，建议国内网络）。"
+            )
         
         print("[DeepKE] 正在加载 ModelScope NER 模型 (iic/nlp_raner_named-entity-recognition_chinese-base-generic)...")
         print("[DeepKE] 首次加载会自动下载模型，请耐心等待...")

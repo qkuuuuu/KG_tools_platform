@@ -25,13 +25,22 @@ async def update_schemas(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),  # H1 修复: 修改 Schema 需 admin 权限
 ):
+    # 保留已有中文标签（表格编辑只填英文标识符，避免覆盖 DSL 导入的中文）
+    existing = {
+        (s.subject_type, s.predicate, s.object_type): s
+        for s in db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).all()
+    }
     db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).delete()
     for s in schemas:
+        prev = existing.get((s.subject_type, s.predicate, s.object_type))
         db.add(SchemaConstraint(
             project_id=project_id,
             subject_type=s.subject_type,
             predicate=s.predicate,
             object_type=s.object_type,
+            subject_label=prev.subject_label if prev else None,
+            predicate_label=prev.predicate_label if prev else None,
+            object_label=prev.object_label if prev else None,
         ))
     db.commit()
     return db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).all()
@@ -74,6 +83,9 @@ async def import_dsl(project_id: UUID, body: dict, db: Session = Depends(get_db)
             subject_type=rel["subject_type"],
             predicate=rel["predicate"],
             object_type=rel["object_type"],
+            subject_label=rel.get("subject_label"),
+            predicate_label=rel.get("predicate_label"),
+            object_label=rel.get("object_label"),
         ))
     db.commit()
     return {"namespace": result["namespace"], "entities_count": len(result["entities"]), "relations_count": len(result["relations"])}

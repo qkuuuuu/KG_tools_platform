@@ -72,6 +72,9 @@ class SchemaResponse(BaseModel):
     subject_type: str
     predicate: str
     object_type: str
+    subject_label: Optional[str] = None
+    predicate_label: Optional[str] = None
+    object_label: Optional[str] = None
 
     class Config:
         from_attributes = True

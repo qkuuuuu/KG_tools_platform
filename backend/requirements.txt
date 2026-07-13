@@ -29,14 +29,15 @@ python-docx>=1.1
 openpyxl>=3.1
 rdflib>=7.0
 
-# NER / Extraction (optional, heavy — uncomment as needed)
-# spacy>=3.7
-# gliner>=0.1
-# paddlenlp>=3.0
-# paddlepaddle>=3.0
-# paddleocr>=2.7
-# modelscope>=1.14
-# mineru[all]
+# NER / Extraction (heavy — 默认开启；如仅需部分引擎可注释对应行)
+spacy>=3.7
+gliner>=0.1
+paddlenlp>=3.0
+# 使用 GPU（如 T4）时把下面这行换成 paddlepaddle-gpu>=3.0；纯 CPU 环境保持 paddlepaddle
+paddlepaddle>=3.0
+paddleocr>=2.7
+modelscope>=1.14
+mineru[all]
 
 # Misc
 aiofiles>=24.0

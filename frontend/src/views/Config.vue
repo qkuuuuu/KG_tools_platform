@@ -63,9 +63,15 @@
             <el-button size="small" type="danger" plain @click="deleteAllSchemas" :disabled="!schemas.length">一键全部删除</el-button>
           </div>
           <el-table :data="schemas" stripe style="width: 100%; margin-bottom: 16px;">
-            <el-table-column prop="subject_type" label="主体类型" />
-            <el-table-column prop="predicate" label="关系" />
-            <el-table-column prop="object_type" label="客体类型" />
+            <el-table-column label="头实体类型">
+              <template #default="{ row }">{{ row.subject_label || row.subject_type }}</template>
+            </el-table-column>
+            <el-table-column label="关系">
+              <template #default="{ row }">{{ row.predicate_label || row.predicate }}</template>
+            </el-table-column>
+            <el-table-column label="尾实体类型">
+              <template #default="{ row }">{{ row.object_label || row.object_type }}</template>
+            </el-table-column>
             <el-table-column label="操作" width="100">
               <template #default="{ $index }">
                 <el-button size="small" type="danger" @click="schemas.splice($index, 1)">删除</el-button>
@@ -73,9 +79,9 @@
             </el-table-column>
           </el-table>
           <div style="display: flex; gap: 12px; margin-bottom: 16px;">
-            <el-input v-model="newSchema.subject_type" placeholder="主体类型" />
+            <el-input v-model="newSchema.subject_type" placeholder="头实体类型" />
             <el-input v-model="newSchema.predicate" placeholder="关系" />
-            <el-input v-model="newSchema.object_type" placeholder="客体类型" />
+            <el-input v-model="newSchema.object_type" placeholder="尾实体类型" />
             <el-button @click="addSchema">+ 添加</el-button>
           </div>
           <el-button type="primary" @click="saveSchemas">保存 Schema</el-button>
@@ -116,7 +122,7 @@
                 <div v-if="dslPreview.relations?.length" style="margin-top: 12px;">
                   <h5 style="color: #e6a23c;">关系约束 ({{ dslPreview.relations.length }})</h5>
                   <div v-for="(r, i) in dslPreview.relations" :key="i" style="font-size: 13px; margin: 4px 0;">
-                    {{ r.subject_type }} → <strong>{{ r.predicate }}</strong> → {{ r.object_type }}
+                    {{ r.subject_label || r.subject_type }} → <strong>{{ r.predicate_label || r.predicate }}</strong> → {{ r.object_label || r.object_type }}
                   </div>
                 </div>
                 <div v-if="dslPreview.error" style="color: #f56c6c;">{{ dslPreview.error }}</div>
@@ -369,7 +375,7 @@ function parseDslLocal(dsl) {
     // entity header: 支持中英文混杂
     // 格式1: Name(中文标签): EntityType
     // 格式2: 中文标签(Name): EntityType
-    const entMatch = trimmed.match(/^([\w\u4e00-\u9fff]+)\s*\(([^)]+)\)\s*:\s*EntityType/)
+    const entMatch = trimmed.match(/^([\w\u4e00-\u9fff]+)\s*\(([^)]+)\)\s*:\s*(?:EntityType|IndexType)/)
     if (entMatch) {
       let [, name, label] = entMatch
       // 判断哪个是英文标识符
@@ -444,7 +450,7 @@ async function importDsl() {
     ElMessage.warning('后端导入接口暂不可用，已本地解析。关系约束将同步到表格。')
     // 把解析出的关系写入 schemas 表格
     for (const r of parsed.relations) {
-      schemas.value.push({ subject_type: r.subject_type, predicate: r.predicate, object_type: r.object_type })
+      schemas.value.push({ subject_type: r.subject_type, predicate: r.predicate, object_type: r.object_type, subject_label: r.subject_label, predicate_label: r.predicate_label, object_label: r.object_label })
     }
     dslPreview.value = parsed
   }

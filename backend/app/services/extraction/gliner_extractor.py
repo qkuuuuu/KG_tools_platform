@@ -80,7 +80,13 @@ def extract_with_gliner(
         os.environ["HF_ENDPOINT"] = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
         
         if _MODEL_CACHE is None:
-            from gliner import GLiNER
+            try:
+                from gliner import GLiNER
+            except ImportError:
+                raise RuntimeError(
+                    "GLiNER 抽取引擎未部署：请执行 `pip install gliner` 并重启服务。"
+                    "首次运行会自动从 HuggingFace 下载 GLiNER 模型（需联网）。"
+                )
             _MODEL_CACHE = GLiNER.from_pretrained(model_name)
             print(f"[GLiNER] 模型已加载: {model_name}")
         

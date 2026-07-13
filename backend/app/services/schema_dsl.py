@@ -59,9 +59,10 @@ def parse_dsl(dsl: str) -> Dict[str, Any]:
             continue
 
         # 实体定义: 支持中英文混杂
-        # 格式: Name(中文标签): EntityType 或 中文标签(Name): EntityType
+        # 格式: Name(中文标签): EntityType|IndexType 或 中文标签(Name): EntityType|IndexType
+        # IndexType 用于标记可向量索引的类型(如 AtomicQuery / KnowledgeUnit)
         ent_match = re.match(
-            r"^([\w\u4e00-\u9fff]+)\s*\(([^)]+)\)\s*:\s*EntityType\s*$", trimmed
+            r"^([\w\u4e00-\u9fff]+)\s*\(([^)]+)\)\s*:\s*(?:EntityType|IndexType)\s*$", trimmed
         )
         if ent_match:
             name, label = ent_match.group(1), ent_match.group(2)
@@ -127,6 +128,16 @@ def parse_dsl(dsl: str) -> Dict[str, Any]:
                     entities.append(placeholder)
                     entity_map[item_type] = placeholder
             continue
+
+    # 后处理: 用最终实体表回填中文标签
+    # 处理「目标类型在 relations 之后才定义」的情况(避免占位实体遗留英文标签)
+    for rel in relations:
+        subj_ent = entity_map.get(rel["subject_type"])
+        if subj_ent:
+            rel["subject_label"] = subj_ent["label"]
+        obj_ent = entity_map.get(rel["object_type"])
+        if obj_ent:
+            rel["object_label"] = obj_ent["label"]
 
     return {
         "namespace": namespace,
