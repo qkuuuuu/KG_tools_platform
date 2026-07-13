@@ -11,7 +11,7 @@
 
 ## 项目简介
 
-KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从文档解析、多方法三元组抽取、大模型质检、人工审核（HITL）到知识融合与资产导出的完整链路。平台支持 LLM Prompt / 规则 / 深度学习（GLiNER、UIE、DeepKE）等多种抽取引擎，并通过动态 Schema 与项目级数据隔离支撑多业务场景。
+KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从文档解析、多方法三元组抽取、大模型质检、人工审核（HITL）、知识融合与资产导出，到 **KAG 知识增强问答（Knowledge Augmented Generation）** 的完整链路。平台支持 LLM Prompt / 规则 / 深度学习（GLiNER、UIE、DeepKE）等多种抽取引擎，并通过动态 Schema 与项目级数据隔离支撑多业务场景。
 
 ---
 
@@ -25,6 +25,7 @@ KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从�
   - 深度学习模型：GLiNER、UIE、DeepKE（按需安装）
 - **大模型质检 + HITL 人工审核**：自动置信度评分与阈值分流，低置信度样本进入人工复核。
 - **知识融合与资产管理**：实体对齐、别名归一、血缘追溯，融合结果可导出多种格式。
+- **KAG 知识增强问答**：内置 KAG 式智能助手，将知识图谱作为结构化知识源，结合多跳子图检索与 LLM 推理，回答可解释、可追溯（详见下章）。
 - **项目级数据隔离**：多项目独立配置与运行。
 
 ---
@@ -35,7 +36,7 @@ KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从�
 |------|------|
 | 前端 | Vue 3 + Element Plus + Pinia + AntV G6 |
 | 后端 | FastAPI + SQLAlchemy + JWT + bcrypt |
-| AI 集成 | LangChain / OpenAI / Anthropic SDK |
+| AI 集成 | LangChain / OpenAI / Anthropic SDK / KAG 知识增强生成 |
 | 数据库 | PostgreSQL 16 + Neo4j 5（可选） |
 | 容器 | Docker + Docker Compose |
 
@@ -63,6 +64,43 @@ KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从�
 ```
 
 > 前端容器内 Nginx 已把 `/api/` 和 `/ws/` 反代到后端 `backend-api:8000`，**部署到服务器时无需修改任何前端 API 地址**。
+
+---
+
+## KAG 智能助手（知识增强生成 / Knowledge Augmented Generation）
+
+平台内置一个 **KAG 式智能助手**，将已构建的知识图谱作为结构化知识源，让大模型基于图谱进行**可解释的推理问答**（参考 OpenSPG/KAG 的核心思想）。它把「图谱检索」与「LLM 推理」结合，回答可追溯、可解释。
+
+### 工作链路（KAG 四步推理）
+
+1. **问题解析**：从用户问题中识别实体、关系意图。
+2. **知识检索**：在三元组库（优先融合后的图谱 `TripleFused`，补充已通过审核 `PASSED` 的原始三元组）中检索相关子图，BFS 多跳（默认 2 跳）扩展。
+3. **推理合成**：将子图作为上下文注入 LLM 提示词，由大模型推理出答案。
+4. **推理路径**：返回用到的实体、节点与关系边，支持答案溯源与可视化。
+
+### 核心能力
+
+- **多跳图谱问答**：支持跨多实体的链式推理，自动抽取相关子图（最多 50 条关系 / 100 节点）。
+- **可解释推理路径**：每次回答附带 `reasoning_path`（实体、节点、边）与子图统计，前端可可视化推理链路。
+- **多项目融合查询**：请求可传入 `project_ids` 多个项目，跨项目联合推理。
+- **持续会话**：会话持久化（增删改查 + 消息历史），支持多轮对话上下文（最近 12 条消息）。
+- **推荐问题**：根据图谱实际实体 / 关系自动生成引导性问题，降低提问门槛。
+- **优雅降级**：未配置 LLM 时，仍返回纯图谱检索结果（实体 + 关系）并提示去「模型配置」设置；LLM 配置优先取 `ASSISTANT` 阶段，回退 `EXTRACTION / FUSION / QUALITY`。
+- **项目级隔离**：会话与消息按项目、按用户隔离。
+
+### 关键接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/assistant/{project_id}/chat` | POST | 基于图谱的推理问答（支持 `session_id` / `project_ids`） |
+| `/api/assistant/{project_id}/sessions` | GET / POST | 列出 / 新建会话 |
+| `/api/assistant/{project_id}/sessions/{session_id}` | PUT / DELETE | 重命名 / 删除会话 |
+| `/api/assistant/{project_id}/sessions/{session_id}/messages` | GET | 获取会话消息历史 |
+| `/api/assistant/{project_id}/suggested-questions` | GET | 获取图谱引导式推荐问题 |
+
+> **使用前提**：项目需已完成抽取、融合，且至少配置一个可用的 LLM（见「模型配置」）。子图检索基于已通过审核（`PASSED` / `FUSED`）的三元组。
+>
+> **相关代码**：引擎 `backend/app/services/assistant_engine.py`，路由 `backend/app/routers/assistant.py`。
 
 ---
 
@@ -117,7 +155,7 @@ kg-platform/
 │       ├── core/             # 配置、安全、数据库
 │       ├── models/           # SQLAlchemy 模型
 │       ├── schemas/          # Pydantic 模式
-│       ├── services/         # 业务逻辑（解析/抽取/融合）
+│       ├── services/         # 业务逻辑（解析/抽取/融合/助手-KAG）
 │       └── utils/            # 安全、加解密工具
 ├── frontend/                 # Vue3 前端
 │   ├── Dockerfile
@@ -226,4 +264,4 @@ docker compose exec postgres-db pg_dump -U postgres kg_platform > backup_$(date 
 
 本项目为内部私有项目，暂不开放源代码与许可证授权。
 
-最后更新：2026-07-13
+最后更新：2026-07-13（新增 KAG 智能助手章节）
