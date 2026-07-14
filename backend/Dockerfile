@@ -22,7 +22,7 @@ WORKDIR /app
 
 # 系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc curl \
+    libpq-dev build-essential gfortran curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖（单独一层，利用 Docker 缓存）
