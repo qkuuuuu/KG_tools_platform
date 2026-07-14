@@ -49,12 +49,15 @@ paddlepaddle-gpu>=2.6.0
 paddleocr>=3.5.0
 modelscope>=1.14
 # ---- PyTorch (CUDA 构建, 供 gliner / mineru / DeepKE / spaCy-transformer 使用 GPU) ----
-# 必须显式 pin 到 +cu121 本地版本: 否则 pip 会优先选 PyPI 上的 CPU 版 torch, GPU 失效
+# 必须显式 pin 到 +cu124 本地版本: 否则 pip 会优先选 PyPI 上的 CPU 版 torch, GPU 失效
 # 注意: torch 必须 >=2.6，因为 mineru 3.x 要求 torch>=2.6（其 pipeline/vlm extra 显式约束）。
 # 若降到 2.3，mineru 解析会回退到旧的 magic-pdf 线并强制 scipy==1.9.1，导致构建冲突/源码编译失败。
---extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.6.0+cu121
-torchvision==0.21.0+cu121
+# 重要: PyTorch 自 2.6.0 起不再发布 +cu121 wheel（cu121 只到 2.5.1），故这里用 +cu124。
+# +cu124 要求宿主机 NVIDIA 驱动 >= 550（T4 配较新驱动即可）；如驱动较旧请改用 +cu121 + torch==2.5.1 组合
+# （但会违反 mineru 的 torch>=2.6 约束，需同步降级 mineru）。
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
 # mineru 必须钉版本: 未锁版本会从 PyPI 拉最新(随 PyTorch/torchvision 约束漂移)，导致构建不确定。
 # 用 [pipeline] 而非 [all]: 后端 parsers.py 只用 `mineru -b pipeline` CLI，不需要 [all] 额外拉入的
 # vllm/gradio（vllm 对 CUDA 版本敏感、体积大，易引发构建失败）。3.4.4 不依赖 magic-pdf/scipy，
