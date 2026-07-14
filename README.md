@@ -104,6 +104,49 @@ KG Platform 是一个**多方法知识图谱构建与融合平台**，覆盖从�
 
 ---
 
+## 模型配置（LLM 路由 / 自定义 Prompt / 向量开关）
+
+平台在「配置 → 大模型路由配置」中按**流水线阶段**独立配置每个 LLM 调用点，所有 API Key 在落库前加密存储。
+
+### 可配置阶段
+
+| 阶段 | 说明 | 是否使用 Prompt |
+|------|------|----------------|
+| `PARSE_AUDIT` | 解析质检：审核文档解析结果质量 | 是（预填默认 Prompt） |
+| `EXTRACTION` | 核心三元组抽取 | 是（预填默认 Prompt） |
+| `VERIFICATION` | 置信度审批（质检） | 是（预填默认 Prompt） |
+| `FUSION` | 知识融合 | 否 |
+| `DISAMBIGUATION` | 三元组语义消歧（审核台手动触发） | 是（预填默认 Prompt） |
+| `EMBEDDING` | 向量模型 API（OpenAI 兼容 Embedding，用于入库前语义匹配） | 否（仅配置模型地址） |
+
+### 自定义 Prompt
+
+- 除 `FUSION` / `EMBEDDING` 外，每个阶段都有「自定义 Prompt」开关：
+  - **关闭**：使用系统内置默认 Prompt（解析质检 / 核心抽取 / 置信度审批 / 三元组消歧各有独立模板）。
+  - **开启**：自动预填当前阶段默认 Prompt，可在此基础上编辑后保存；留空则回退默认。
+- 默认 Prompt 模板见后端 `backend/app/services/default_prompts.py`。
+
+### 向量模型开关（EMBEDDING 阶段）
+
+- `EMBEDDING` 阶段配置一个 **OpenAI 兼容的向量(Embedding)模型** 后，三元组入库前消歧会优先用**向量余弦相似度**做真正的语义匹配；关闭「启用向量匹配」开关则回退到**词面相似度**（difflib），不再调用向量模型（省成本）。
+- ⚠️ **两种「向量模型(Embedding)」不是一回事**：
+  - 本卡片的「向量模型 API (Embedding)」= 调用 OpenAI 兼容向量接口（云端/自建，用于三元组语义匹配）；
+  - 「设备配置」里的「本地向量模型推理 (Embedding)」= 本地模型跑在 CPU 还是 GPU（计算资源层面）。
+  - 两者独立，请勿混淆。
+- `EMBEDDING` 阶段仅支持 OpenAI 兼容接口（OpenAI / DeepSeek / Qwen 等），Anthropic 无向量接口，UI 已禁用。
+
+### 相关环境变量（可选调优）
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `KG_DISAMBIGUATION_SIMILARITY_THRESHOLD` | 词面(difflib)消歧阈值（0~1，≈0.85 表示几乎相同文本） | `0.85` |
+| `KG_EMBEDDING_SIMILARITY_THRESHOLD` | 向量(余弦)消歧阈值（0~1，通常比词面阈值更宽松） | `0.80` |
+| `KG_AUTO_DISAMBIGUATION` | 是否开启入库前自动消歧检测 | `true` |
+
+> LLM 语义消歧（审核台「三元组语义消歧」按钮）与上面的自动向量消歧**互补**：前者是人工在审核台用大模型判断两条三元组是否同一事实；后者是入库前自动的语义相似匹配。长时间关闭向量开关时，仍可点上 LLM 消歧按钮做语义归一。
+
+---
+
 ## 快速开始（Docker 一键部署）
 
 > 前置要求：服务器已安装 **Docker 20.10+** 与 **Docker Compose v2**。
@@ -138,6 +181,26 @@ Neo4j 默认不启动，需要图可视化 / 图查询时：
 ```bash
 docker compose --profile full up -d --build
 ```
+
+---
+
+## 加速镜像构建（免服务器下载模型）
+
+`docker compose up -d --build` 会在构建期从 ModelScope / HuggingFace 镜像下载多个大模型（几个 GB），在机器上首次构建较久。若服务器拉取慢，推荐**在本机（网速好）构建一次，把整镜像打包分发**，服务器零下载：
+
+```bash
+# 本机：构建并导出镜像（含全部模型，约 10~20GB，建议压缩）
+docker compose build backend-api
+docker save kg-platform-backend-api:latest -o kg_backend.tar
+pigz kg_backend.tar            # 可选，压缩后传输更快
+
+# 服务器：加载并直接启动（注意：不要带 --build，否则又会重新下载）
+docker load -i kg_backend.tar.gz
+docker tag kg-platform-backend-api:latest kgplatform_backend-api:latest
+docker compose up -d
+```
+
+> 若改用私有镜像仓库（Harbor / 阿里云 ACR 等），用 `docker push` / `pull` 比 `save` / `load` 更方便，本质相同。
 
 ---
 
@@ -188,6 +251,9 @@ kg-platform/
 | `JWT_SECRET` | 登录 Token 签发密钥 | 强随机串（见下） |
 | `ENCRYPTION_KEY` | LLM API Key 落库加密密钥 | 强随机串（见下） |
 | `CORS_ORIGINS` | 允许跨域的源 | `*` 或 `https://你的域名` |
+| `KG_DISAMBIGUATION_SIMILARITY_THRESHOLD` | 词面(difflib)消歧阈值（0~1） | `0.85` |
+| `KG_EMBEDDING_SIMILARITY_THRESHOLD` | 向量(余弦)消歧阈值（0~1，通常更宽松） | `0.80` |
+| `KG_AUTO_DISAMBIGUATION` | 是否开启入库前自动消歧检测 | `true` |
 
 生成强随机密钥：
 
@@ -224,7 +290,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ### C. 不需要改
 
 - 前端 API 地址：容器内已完成反代，无需改动。
-- `download/` 模型文件：PaddleOCR / UIE / GLiNER / DeepKE(RaNER) / spaCy / MinerU 的大模型已在**镜像构建期**由 `backend/predownload_models.py` 下载并打包进镜像（缓存统一位于 `/opt/models`，由 Dockerfile 的 `HOME`/`HF_HOME`/`MODELSCOPE_CACHE`/`PADDLENLP_HOME` 指定），运行时直接命中，**无需用户首次使用时联网下载**。构建期已配置 `HF_ENDPOINT=https://hf-mirror.com`、`MINERU_MODEL_SOURCE=modelscope` 走国内镜像。若某模型构建期下载失败，对应引擎会在首次使用时自动回退下载（或降级方案）。
+- 模型文件（构建期下载）：PaddleOCR / UIE / GLiNER / DeepKE(RaNER) / spaCy / MinerU 的大模型在**镜像构建期**由 `backend/predownload_models.py` 下载并打包进镜像（缓存统一位于 `/opt/models`，由 Dockerfile 的 `HOME`/`HF_HOME`/`MODELSCOPE_CACHE`/`PADDLENLP_HOME` 指定），运行时直接命中，**无需用户首次使用时联网下载**。构建期已配置 `HF_ENDPOINT=https://hf-mirror.com`、`MINERU_MODEL_SOURCE=modelscope` 走国内镜像。若某模型构建期下载失败，对应引擎会在首次使用时自动回退下载（或降级方案）。
 
 ---
 
