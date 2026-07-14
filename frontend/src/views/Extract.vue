@@ -302,6 +302,20 @@
             选择约束抽取范围的 schema；不选则使用项目下全部 schema
           </div>
         </el-form-item>
+
+        <!-- 需求2：自定义 Prompt（约束表 + 文档内容会自动一并发送） -->
+        <el-form-item label="自定义 Prompt">
+          <el-input
+            v-model="form.extractPrompt"
+            type="textarea"
+            :rows="5"
+            placeholder="可选：覆盖默认抽取指令。约束表与文档解析内容会自动组合发送，无需在此重复粘贴。"
+            style="font-family: monospace; font-size: 12px;"
+          />
+          <div style="margin-top: 6px; font-size: 12px; color: #95a5a6;">
+            留空则使用配置页中该阶段保存的 Prompt / 系统默认 Prompt
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="extractDialogVisible = false">取消</el-button>
@@ -372,6 +386,19 @@
           </el-upload>
           <div v-if="benchmarkFile" style="margin-top: 6px; color: #67c23a; font-size: 12px;">
             ✅ 已选择: {{ benchmarkFile.name }}
+          </div>
+        </el-form-item>
+        <!-- 需求3：自定义 Prompt（上传文件 + 约束表会自动一并发送） -->
+        <el-form-item label="自定义 Prompt">
+          <el-input
+            v-model="form.qualityPrompt"
+            type="textarea"
+            :rows="5"
+            placeholder="可选：覆盖默认质检指令。上传的基准文件与项目约束表会自动组合发送。"
+            style="font-family: monospace; font-size: 12px;"
+          />
+          <div style="margin-top: 6px; font-size: 12px; color: #95a5a6;">
+            留空则使用配置页中该阶段保存的 Prompt / 系统默认 Prompt
           </div>
         </el-form-item>
       </el-form>
@@ -454,6 +481,8 @@ const form = reactive({
   qualityThreshold: 90,
   scriptId: '',
   schemaIds: [],
+  extractPrompt: '',   // 需求2：知识抽取的自定义 Prompt
+  qualityPrompt: '',   // 需求3：质检的自定义 Prompt
 })
 
 const uploading = ref(false)
@@ -697,7 +726,7 @@ async function doExtract() {
   extracting.value = true
   try {
     // schemaIds：用户选择则用所选；未选则传空数组，由后端按项目全部 schema 处理
-    await extractApi.extract(currentDoc.value.id, form.extractMethod, form.schemaIds || [], form.scriptId || undefined)
+    await extractApi.extract(currentDoc.value.id, form.extractMethod, form.schemaIds || [], form.scriptId || undefined, form.extractPrompt || undefined)
     ElMessage.success('抽取任务已启动')
     extractDialogVisible.value = false
     await loadExtractTasks()
@@ -773,7 +802,7 @@ async function doQualityCheck() {
   }
   checking.value = true
   try {
-    await extractApi.qualityCheck(docId, form.qualityThreshold, benchmarkFile.value)
+    await extractApi.qualityCheck(docId, form.qualityThreshold, benchmarkFile.value, form.qualityPrompt || undefined)
     ElMessage.success('质检任务已启动')
     qualityDialogVisible.value = false
   } catch (e) {

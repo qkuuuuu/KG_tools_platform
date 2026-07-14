@@ -63,7 +63,11 @@
         <div class="kg-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <span style="color: #95a5a6; font-size: 13px;">点击"通过"/"拒绝"后自动提交，无需额外操作</span>
-            <el-button type="primary" size="small" @click="batchPass" :disabled="!selectedRows.length">批量通过 ({{ selectedRows.length }})</el-button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <el-checkbox v-model="ambiguousOnly" @change="onAmbiguousToggle">仅看待消歧</el-checkbox>
+              <el-button type="warning" size="small" @click="disambiguateSelected" :disabled="!selectedRows.length">LLM三元组消歧 ({{ selectedRows.length }})</el-button>
+              <el-button type="primary" size="small" @click="batchPass" :disabled="!selectedRows.length">批量通过 ({{ selectedRows.length }})</el-button>
+            </div>
           </div>
           <el-table :data="triples" @selection-change="onSelectionChange" stripe style="width: 100%">
             <el-table-column type="selection" width="50" />
@@ -92,6 +96,14 @@
               </template>
             </el-table-column>
             <el-table-column prop="extraction_method" label="方法" width="120" />
+            <el-table-column label="消歧" width="100">
+              <template #default="{ row }">
+                <el-tooltip v-if="row.needs_disambiguation" :content="row.disambiguation_note || '该三元组与库中已有三元组语义相似，待消歧'" placement="top">
+                  <el-tag type="warning" size="small">待消歧</el-tag>
+                </el-tooltip>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
                 <el-button size="small" type="success" @click="quickAction(row, 'PASS')">通过</el-button>
@@ -169,7 +181,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { hitlApi, llmConfigApi } from '../api'
+import { hitlApi, llmConfigApi, extractApi } from '../api'
 import { useAuthStore } from '../stores'
 
 const quickForm = reactive({ api_provider: 'OPENAI', base_url: '', api_key: '', model_name: '' })
@@ -207,6 +219,7 @@ const selectedRows = ref([])
 const editingId = ref(null)
 const editData = reactive({ subject: '', predicate: '', object: '' })
 const contextText = ref('')
+const ambiguousOnly = ref(false)
 
 // 已审核
 const reviewedTriples = ref([])
@@ -226,9 +239,28 @@ async function loadAll() {
 
 async function loadPending() {
   try {
-    triples.value = await hitlApi.pending(projectId, page.value)
+    triples.value = await hitlApi.pending(projectId, page.value, 20, ambiguousOnly.value)
   } catch (e) {
     ElMessage.error('加载待审核失败')
+  }
+}
+
+function onAmbiguousToggle() {
+  page.value = 1
+  loadPending()
+}
+
+// 需求5：对选中的待消歧三元组批量运行 LLM 三元组消歧
+async function disambiguateSelected() {
+  if (!selectedRows.value.length) return
+  const ids = selectedRows.value.map(r => r.id)
+  try {
+    const res = await extractApi.disambiguate(ids)
+    ElMessage.success(`消歧任务已启动 (task_id=${res.task_id})，结果将作为新三元组进入抽取队列等待质检`)
+    selectedRows.value = []
+    await Promise.all([loadPending(), loadStats()])
+  } catch (e) {
+    ElMessage.error('发起消歧失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 

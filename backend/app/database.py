@@ -27,6 +27,7 @@ def _run_additive_migrations():
         'ALTER TABLE schema_constraints ADD COLUMN IF NOT EXISTS subject_label VARCHAR(200);',
         'ALTER TABLE schema_constraints ADD COLUMN IF NOT EXISTS predicate_label VARCHAR(200);',
         'ALTER TABLE schema_constraints ADD COLUMN IF NOT EXISTS object_label VARCHAR(200);',
+        'ALTER TABLE llm_configs ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;',
     ]
     try:
         if engine.dialect.name != "postgresql":

@@ -8,6 +8,14 @@
     <!-- LLM 配置 -->
     <div class="kg-card">
       <h3 style="margin-bottom: 16px;">大模型路由配置</h3>
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px;"
+        title="两种「向量模型(Embedding)」不是一回事"
+        description="本卡片的「向量模型 API (Embedding)」是配置调用 OpenAI 兼容的向量接口（用于三元组语义匹配）；下方「设备配置」里的「本地向量模型推理 (Embedding)」是指本地模型跑在 CPU 还是 GPU。两者独立，请勿混淆。"
+      />
       <el-table :data="llmConfigs" stripe style="width: 100%">
         <el-table-column label="阶段" width="150">
           <template #default="{ row }">
@@ -167,20 +175,25 @@
     <el-dialog v-model="editDialog" title="编辑 LLM 配置" width="520px">
       <el-form :model="editForm" label-width="100px">
         <el-form-item label="阶段">
-          <el-select v-model="editForm.pipeline_stage" style="width: 100%;">
+          <el-select v-model="editForm.pipeline_stage" style="width: 100%;" @change="onStageChange">
             <el-option label="解析质检" value="PARSE_AUDIT" />
             <el-option label="核心抽取" value="EXTRACTION" />
             <el-option label="置信度审批" value="VERIFICATION" />
             <el-option label="融合阶段" value="FUSION" />
+            <el-option label="三元组消歧" value="DISAMBIGUATION" />
+            <el-option label="向量模型 API (Embedding)" value="EMBEDDING" />
           </el-select>
         </el-form-item>
         <el-form-item label="服务商">
           <el-select v-model="editForm.api_provider" style="width: 100%;">
             <el-option label="OpenAI" value="OPENAI" />
-            <el-option label="Anthropic" value="ANTHROPIC" />
+            <el-option label="Anthropic" value="ANTHROPIC" :disabled="editForm.pipeline_stage === 'EMBEDDING'" />
             <el-option label="DeepSeek" value="DEEPSEEK" />
             <el-option label="Qwen" value="QWEN" />
           </el-select>
+          <div v-if="editForm.pipeline_stage === 'EMBEDDING'" style="margin-top: 6px; font-size: 12px; color: #e6a23c;">
+            向量(Embedding)仅支持 OpenAI 兼容接口（OpenAI / DeepSeek / Qwen 等），Anthropic 无向量接口，已禁用。
+          </div>
         </el-form-item>
         <el-form-item label="Base URL">
           <el-input v-model="editForm.base_url" placeholder="https://api.openai.com/v1" />
@@ -189,8 +202,47 @@
           <el-input v-model="editForm.api_key" type="password" show-password placeholder="sk-..." />
         </el-form-item>
         <el-form-item label="模型名">
-          <el-input v-model="editForm.model_name" placeholder="gpt-4o" />
+          <el-input
+            v-model="editForm.model_name"
+            :placeholder="editForm.pipeline_stage === 'EMBEDDING' ? 'text-embedding-3-small / text-embedding-v3 ...' : 'gpt-4o'"
+          />
         </el-form-item>
+        <!-- EMBEDDING 阶段：向量模型开关 + 说明（向量模型不使用 Prompt） -->
+        <template v-if="editForm.pipeline_stage === 'EMBEDDING'">
+          <el-form-item label="启用向量匹配">
+            <el-switch v-model="editForm.enabled" active-text="开启" inactive-text="关闭" />
+            <span style="margin-left: 8px; font-size: 12px; color: #95a5a6;">关闭后入库前消歧将回退词面相似度，不再调用向量模型（省成本）</span>
+          </el-form-item>
+          <el-form-item>
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="向量模型说明"
+              description="配置一个 OpenAI 兼容的向量(Embedding)模型后，三元组入库前消歧将使用向量余弦相似度进行真正的语义匹配；未配置或关闭时自动回退到词面相似度。"
+            />
+          </el-form-item>
+        </template>
+        <!-- 其它阶段：自定义 Prompt（勾选后预填当前阶段默认提示词，可编辑） -->
+        <template v-else>
+          <el-form-item label="自定义 Prompt">
+            <el-switch v-model="useCustomPrompt" @change="onToggleCustomPrompt" active-text="启用" inactive-text="使用默认" />
+            <span style="margin-left: 8px; font-size: 12px; color: #95a5a6;">关闭则使用系统默认 Prompt；开启后会预填默认提示词，可在此基础上修改</span>
+          </el-form-item>
+          <el-form-item v-if="useCustomPrompt" label="Prompt 内容">
+            <el-input
+              v-model="editForm.prompt"
+              type="textarea"
+              :rows="9"
+              :placeholder="defaultPromptPlaceholder"
+              style="font-family: monospace; font-size: 12px;"
+            />
+            <div style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
+              <el-button size="small" @click="resetPromptToDefault">恢复默认 Prompt</el-button>
+              <span style="font-size: 12px; color: #95a5a6;">已预填当前阶段默认提示词，可继续编辑后保存</span>
+            </div>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="editDialog = false">取消</el-button>
@@ -201,7 +253,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { llmConfigApi, schemaApi, deviceConfigApi, exportApi } from '../api'
@@ -216,7 +268,18 @@ const dslInput = ref('')
 const dslPreview = ref(null)
 const editDialog = ref(false)
 const editForm = reactive({
-  pipeline_stage: 'EXTRACTION', api_provider: 'OPENAI', base_url: '', api_key: '', model_name: ''
+  pipeline_stage: 'EXTRACTION', api_provider: 'OPENAI', base_url: '', api_key: '', model_name: '', prompt: '', enabled: true
+})
+// 是否启用自定义 Prompt（勾选后预填默认提示词，可编辑）
+const useCustomPrompt = ref(false)
+// 需求1：各阶段默认 Prompt（用于"自定义 Prompt"输入框预填充）
+const defaultPrompts = ref({ stages: {} })
+function defaultPromptForStage(stage) {
+  return (defaultPrompts.value.stages && defaultPrompts.value.stages[stage]) || ''
+}
+const defaultPromptPlaceholder = computed(() => {
+  const s = defaultPromptForStage(editForm.pipeline_stage)
+  return s ? s : '系统默认 Prompt'
 })
 const newSchema = reactive({ subject_type: '', predicate: '', object_type: '' })
 let editIndex = -1
@@ -228,8 +291,16 @@ const ttlImporting = ref(false)
 const ttlResult = ref('')
 
 onMounted(async () => {
-  await Promise.all([loadConfigs(), loadSchemas(), loadDevices()])
+  await Promise.all([loadConfigs(), loadSchemas(), loadDevices(), loadDefaultPrompts()])
 })
+
+async function loadDefaultPrompts() {
+  try {
+    defaultPrompts.value = await llmConfigApi.defaultPrompts(projectId)
+  } catch (e) {
+    defaultPrompts.value = { stages: {} }
+  }
+}
 
 async function loadConfigs() {
   try {
@@ -280,24 +351,57 @@ async function saveDevices() {
 }
 
 function stageLabel(s) {
-  return { PARSE_AUDIT: '解析质检', EXTRACTION: '核心抽取', VERIFICATION: '置信度审批', FUSION: '融合阶段' }[s] || s
+  return { PARSE_AUDIT: '解析质检', EXTRACTION: '核心抽取', VERIFICATION: '置信度审批', FUSION: '融合阶段', DISAMBIGUATION: '三元组消歧', EMBEDDING: '向量模型 API (Embedding)' }[s] || s
 }
 
 function moduleLabel(m) {
-  return { MINERU: 'MinerU (文档解析)', UIE: 'UIE (信息抽取)', DEEPKE: 'DeepKE (NER抽取)', EMBEDDING: '向量嵌入' }[m] || m
+  return { MINERU: 'MinerU (文档解析)', UIE: 'UIE (信息抽取)', DEEPKE: 'DeepKE (NER抽取)', EMBEDDING: '本地向量模型推理 (Embedding)' }[m] || m
+}
+
+// 切换阶段时：若开启了自定义 Prompt，则把输入框刷新为该阶段的默认提示词
+function onStageChange() {
+  if (useCustomPrompt.value) {
+    editForm.prompt = defaultPromptForStage(editForm.pipeline_stage)
+  }
+}
+
+// 勾选/取消"启用自定义 Prompt"：勾选时预填当前阶段默认提示词，取消时清空(后端回退默认)
+function onToggleCustomPrompt(val) {
+  if (val) {
+    editForm.prompt = defaultPromptForStage(editForm.pipeline_stage)
+  } else {
+    editForm.prompt = ''
+  }
 }
 
 function addConfig() {
   editIndex = -1
-  Object.assign(editForm, { pipeline_stage: 'EXTRACTION', api_provider: 'OPENAI', base_url: '', api_key: '', model_name: '' })
+  const stage = 'EXTRACTION'
+  useCustomPrompt.value = false
+  Object.assign(editForm, { pipeline_stage: stage, api_provider: 'OPENAI', base_url: '', api_key: '', model_name: '', prompt: '', enabled: true })
   editDialog.value = true
 }
 
 function editConfig(index) {
   editIndex = index
   const c = llmConfigs.value[index]
-  Object.assign(editForm, { pipeline_stage: c.pipeline_stage, api_provider: c.api_provider, base_url: c.base_url || '', api_key: '', model_name: c.model_name })
+  const custom = !!(c.prompt && c.prompt.trim())
+  useCustomPrompt.value = custom
+  Object.assign(editForm, {
+    pipeline_stage: c.pipeline_stage,
+    api_provider: c.api_provider,
+    base_url: c.base_url || '',
+    api_key: '',
+    model_name: c.model_name,
+    prompt: custom ? c.prompt : '',
+    enabled: c.enabled !== false,
+  })
   editDialog.value = true
+}
+
+// 需求1：将自定义 Prompt 恢复为当前阶段的系统默认模板
+function resetPromptToDefault() {
+  editForm.prompt = defaultPromptForStage(editForm.pipeline_stage)
 }
 
 async function deleteConfig(index) {

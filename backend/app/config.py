@@ -94,6 +94,25 @@ class Settings(BaseSettings):
     # 启发式关系三元组被压低的置信度
     HEURISTIC_CONFIDENCE: float = 30.0
 
+    # 需求4：三元组入库前消歧 —— 相似度阈值（0~1）
+    # 两种匹配模式使用不同阈值（含义不同，详见下方说明）：
+    #  - 词面模式(difflib 文本比率)：DISAMBIGUATION_SIMILARITY_THRESHOLD
+    #    文本比率 0.85 ≈ 两段文字几乎完全相同；适合"字面重复/近似"判定。
+    #  - 向量模式(余弦)：EMBEDDING_SIMILARITY_THRESHOLD
+    #    余弦 0.85 对多数 embedding 模型仅表示"相关"而非"同义"，通常要比
+    #    文本阈值更宽松或单独调参。开启向量模型后，该阈值优先用于向量匹配。
+    # 超过阈值且非完全重复时，标记 needs_disambiguation 进审核台。
+    DISAMBIGUATION_SIMILARITY_THRESHOLD: float = float(
+        os.environ.get("KG_DISAMBIGUATION_SIMILARITY_THRESHOLD", "0.85")
+    )
+    EMBEDDING_SIMILARITY_THRESHOLD: float = float(
+        os.environ.get("KG_EMBEDDING_SIMILARITY_THRESHOLD", "0.80")
+    )
+    # 是否开启入库前自动消歧检测
+    AUTO_DISAMBIGUATION_ENABLED: bool = os.environ.get(
+        "KG_AUTO_DISAMBIGUATION", "true"
+    ).lower() in ("1", "true", "yes", "on")
+
     model_config = ConfigDict(env_file=".env")
 
 

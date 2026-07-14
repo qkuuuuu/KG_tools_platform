@@ -26,6 +26,8 @@ def llm_quality_review(
     threshold: float = 90.0,
     batch_size: int = 15,
     benchmark_content: str = "",
+    custom_prompt: str = None,
+    schema_list: List[Dict] = None,
 ) -> List[Dict]:
     """LLM 对三元组进行反思评分，返回带新置信度的三元组
     
@@ -42,6 +44,8 @@ def llm_quality_review(
         threshold: 通过阈值
         batch_size: 每批数量
         benchmark_content: 质检基准文件内容（约束文档/规范），由用户上传，可选
+        custom_prompt: 用户自定义质检 Prompt（需求3），覆盖默认指令
+        schema_list: 项目约束表（需求3），作为审核上下文一并发送给大模型
     
     Returns:
         更新后的三元组（新增 quality_score, verdict, reason）
@@ -49,28 +53,32 @@ def llm_quality_review(
     if not triples:
         return []
 
-    system_prompt = """你是知识图谱质量审核员。
-对每条三元组进行严格审核：
-1. 主语/宾语是否在原文中明确出现
-2. 谓语关系是否正确反映原文语义
-3. 是否存在幻觉（LLM 编造不存在的事实）
-4. 实体边界是否完整（如：公司名是否包含"有限公司"后缀）
+    from app.services.default_prompts import DEFAULT_VERIFICATION_PROMPT
+    instruction = (custom_prompt.strip() if custom_prompt and custom_prompt.strip()
+                   else DEFAULT_VERIFICATION_PROMPT)
+
+    system_prompt = f"""{instruction}
 
 输出格式: JSON 数组:
-[{"index": 0, "quality_score": 0-100, "verdict": "PASS/REJECT/UNCERTAIN", "reason": "简短原因"}]
+[{{"index": 0, "quality_score": 0-100, "verdict": "PASS/REJECT/UNCERTAIN", "reason": "简短原因"}}]
 
-评分标准:
-90-100: 完全正确，主语宾语均在原文，关系准确
-70-89: 基本正确，但实体边界或关系表述略有问题
-40-69: 存在怀疑点，可能部分错误
-0-39: 明显错误或幻觉
+通过阈值: 评分 >= {threshold} 视为通过(PASS)；明显错误或幻觉视为拒绝(REJECT)；其余为待定(UNCERTAIN)。
 
 只输出 JSON，无需解释。"""
 
-    # 构建基准约束提示（如果有上传基准文件）
+    # 构建基准约束提示（如果有上传基准文件，需求3）
     benchmark_section = ""
     if benchmark_content:
         benchmark_section = f"\n\n===== 质检基准/约束文档 =====\n{benchmark_content[:3000]}\n===== 基准文档结束 =====\n\n请同时参照上述基准文档进行审核：\n- 三元组是否符合基准文档中的定义和约束\n- 实体类型和关系是否与基准一致\n- 是否有违反基准规范的内容"
+
+    # 构建约束表提示（需求3：将约束表一并发送给大模型）
+    schema_section = ""
+    if schema_list:
+        schema_desc = "\n".join(
+            f"- {s.get('subject_label') or s.get('subject_type')} --[{s.get('predicate_label') or s.get('predicate')}]--> {s.get('object_label') or s.get('object_type')}"
+            for s in schema_list[:50]
+        )
+        schema_section = f"\n\n===== 项目约束表（Schema） =====\n{schema_desc}\n===== 约束表结束 =====\n\n请同时参照上述约束表审核：实体类型与关系是否符合约束定义。"
 
     results = list(triples)
     for batch_start in range(0, len(results), batch_size):
@@ -82,7 +90,7 @@ def llm_quality_review(
         )
         
         user_prompt = f"""原始文本（参考验证）:
-{md_content[:3000]}{benchmark_section}
+{md_content[:3000]}{benchmark_section}{schema_section}
 
 待审核三元组（共{len(batch)}条）:
 {triples_text}

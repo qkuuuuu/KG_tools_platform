@@ -44,6 +44,10 @@ class LLMConfig(Base):
     base_url = Column(String(500))
     api_key_encrypted = Column(Text, nullable=False)
     model_name = Column(String(100), nullable=False)
+    prompt = Column(Text)  # 自定义 Prompt（需求1）：覆盖默认指令，可空
+    # 需求4：向量模型(EMBEDDING)开关。True=启用向量语义匹配；False=关闭(回退词面相似度)。
+    # 仅对 EMBEDDING 阶段有意义，其它阶段忽略。默认开启。
+    enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="llm_configs")
@@ -102,6 +106,9 @@ class TripleRaw(Base):
     status = Column(String(20), default="PENDING")
     chunk_text = Column(Text)
     assigned_to = Column(String(100))
+    # 需求4/5：三元组消歧
+    needs_disambiguation = Column(Boolean, default=False)  # 入库前检测到与已有三元组语义相似
+    disambiguation_note = Column(Text)  # 冲突说明 / 命中的已有三元组信息
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     document = relationship("Document", back_populates="triples")

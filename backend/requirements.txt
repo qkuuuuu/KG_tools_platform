@@ -32,9 +32,11 @@ rdflib>=7.0
 # NER / Extraction (heavy — 默认开启；如仅需部分引擎可注释对应行)
 spacy>=3.7
 gliner>=0.1
-# 显式 pin scipy 到带 cp311 manylinux 预编译 wheel 的版本，
-# 否则 pip 会回退到需源码编译的旧版（slim 镜像缺编译工具会失败）。
-# flair==0.13.1 约束 scipy<=1.12，1.11.4 在此范围内且有 wheel。
+# 显式 pin scipy 到带 cp311 manylinux 预编译 wheel 的版本（1.11.4）。
+# 原因：scipy <=1.9.1 没有 cp311 的预编译 wheel，只有 sdist（源码包），
+# 在 slim 镜像里必须从源码编译；若缺少编译工具/工具链不兼容就会构建失败。
+# 1.11.4 同时具备 cp311 wheel 且兼容本项目的传递依赖（spaCy / Paddle / MinerU 等）。
+# 注：本项目后端代码不直接 import scipy，这里仅用于满足上述重依赖的传递要求。
 scipy==1.11.4
 # ---- Paddle 全家桶 (GPU 版, T4) ----
 # 版本号对齐已验证可用的组合:
@@ -48,10 +50,16 @@ paddleocr>=3.5.0
 modelscope>=1.14
 # ---- PyTorch (CUDA 构建, 供 gliner / mineru / DeepKE / spaCy-transformer 使用 GPU) ----
 # 必须显式 pin 到 +cu121 本地版本: 否则 pip 会优先选 PyPI 上的 CPU 版 torch, GPU 失效
+# 注意: torch 必须 >=2.6，因为 mineru 3.x 要求 torch>=2.6（其 pipeline/vlm extra 显式约束）。
+# 若降到 2.3，mineru 解析会回退到旧的 magic-pdf 线并强制 scipy==1.9.1，导致构建冲突/源码编译失败。
 --extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.3.1+cu121
-torchvision==0.18.1+cu121
-mineru[all]
+torch==2.6.0+cu121
+torchvision==0.21.0+cu121
+# mineru 必须钉版本: 未锁版本会从 PyPI 拉最新(随 PyTorch/torchvision 约束漂移)，导致构建不确定。
+# 用 [pipeline] 而非 [all]: 后端 parsers.py 只用 `mineru -b pipeline` CLI，不需要 [all] 额外拉入的
+# vllm/gradio（vllm 对 CUDA 版本敏感、体积大，易引发构建失败）。3.4.4 不依赖 magic-pdf/scipy，
+# 与 torch==2.6.0 自洽；后端通过 subprocess 调 CLI，版本兼容。
+mineru[pipeline]==3.4.4
 
 # Misc
 aiofiles>=24.0

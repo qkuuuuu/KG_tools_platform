@@ -9,11 +9,13 @@ from typing import List, Optional
 from uuid import UUID
 from app.database import get_db
 from app.models import Document, TripleRaw, SchemaConstraint, TaskStatus, User, AuditLog
+from app.schemas import DisambiguateRequest
 from app.utils.security import get_current_user, require_admin
 from app.config import settings
-from app.services.llm_engine import get_llm_config_for_project
+from app.services.llm_engine import get_llm_config_for_project, disambiguate_triples_with_llm
 from app.services.extraction import extract_triples, get_available_engines
 from app.services.quality import llm_quality_review, rule_based_quality
+from app.services.similarity import find_similar_triples, make_embedder
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -78,7 +80,7 @@ async def delete_script(
     return {"status": "ok"}
 
 
-def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[UUID], project_id: UUID, task_id: UUID, script_id: str = ""):
+def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[UUID], project_id: UUID, task_id: UUID, script_id: str = "", custom_prompt: str = ""):
     """后台任务：多引擎抽取"""
     from app.database import SessionLocal
     db = SessionLocal()
@@ -120,6 +122,9 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
                 if not cfg:
                     raise Exception("未配置 EXTRACTION 阶段的 LLM，请先在配置页设置")
 
+            # 需求2：自定义 Prompt 优先级 = 本次请求传入 > LLM 配置中保存的 prompt（需求1）
+            effective_prompt = custom_prompt or (cfg or {}).get("prompt", "")
+
             # ===== 读取设备配置（使用 ORM 模型）=====
             from app.models import DeviceConfig
             dev_rows = db.query(DeviceConfig).filter(
@@ -146,6 +151,7 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
                 schemas=schema_list,
                 cfg=cfg,
                 device_config=device_config,
+                custom_prompt=effective_prompt,
                 **extra_kwargs,
             )
 
@@ -169,6 +175,42 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
                     unique_triples.append(t)
             triples_data = unique_triples
 
+            # ===== 需求4：入库前三元组消歧检测 =====
+            # 检索本项目已有三元组，判断新三元组是否与库中语义相似（非完全重复），
+            # 若相似则标记 needs_disambiguation，交给审核台（HITL）等待人工/LLM 消歧。
+            if settings.AUTO_DISAMBIGUATION_ENABLED:
+                existing = db.query(TripleRaw).filter(
+                    TripleRaw.project_id == project_id,
+                    TripleRaw.status.notin_(["REJECTED", "MERGED"]),
+                ).all()
+                existing_list = [
+                    {"id": str(t.id), "subject": t.subject, "predicate": t.predicate, "object": t.object}
+                    for t in existing
+                ]
+                # 若项目配置了向量模型，用向量语义相似度；否则回退词面相似度
+                embedder = make_embedder(db, project_id)
+                for t in triples_data:
+                    cand = {
+                        "subject": t.get("subject", ""),
+                        "predicate": t.get("predicate", ""),
+                        "object": t.get("object", ""),
+                    }
+                    sims = find_similar_triples(
+                        cand, existing_list,
+                        settings.DISAMBIGUATION_SIMILARITY_THRESHOLD,
+                        embedder,
+                        settings.EMBEDDING_SIMILARITY_THRESHOLD,
+                    )
+                    if sims:
+                        t["needs_disambiguation"] = True
+                        matched = sims[0]
+                        t["disambiguation_note"] = (
+                            f"与已有三元组语义相似(相似度 {matched.get('similarity')}): "
+                            f"({matched.get('subject')}, {matched.get('predicate')}, {matched.get('object')})"
+                        )
+                    else:
+                        t["needs_disambiguation"] = False
+
             # 写入数据库
             for t in triples_data:
                 triple = TripleRaw(
@@ -182,6 +224,8 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
                     llm_confidence=t.get("confidence"),
                     chunk_text=(t.get("chunk") or t.get("source_chunk", ""))[:500],
                     status="PENDING",
+                    needs_disambiguation=bool(t.get("needs_disambiguation", False)),
+                    disambiguation_note=t.get("disambiguation_note"),
                 )
                 db.add(triple)
 
@@ -246,7 +290,7 @@ def _extract_triples_bg(doc_id: UUID, extraction_method: str, schema_ids: List[U
         db.close()
 
 
-def _quality_check_bg(doc_id: UUID, threshold: float, project_id: UUID, task_id: UUID, benchmark_content: str = ""):
+def _quality_check_bg(doc_id: UUID, threshold: float, project_id: UUID, task_id: UUID, benchmark_content: str = "", custom_prompt: str = ""):
     """后台任务：LLM 质检
     
     Args:
@@ -299,7 +343,25 @@ def _quality_check_bg(doc_id: UUID, threshold: float, project_id: UUID, task_id:
                 for t in triples
             ]
 
-            checked = llm_quality_review(triples_data, doc.md_content or "", cfg, threshold, benchmark_content=benchmark_content)
+            # 需求3：将"约束表 + 自定义 Prompt"一并作为上下文发送给大模型
+            schema_list = [
+                {
+                    "subject_type": s.subject_type,
+                    "subject_label": getattr(s, "subject_label", None) or s.subject_type,
+                    "predicate": s.predicate,
+                    "predicate_label": getattr(s, "predicate_label", None) or s.predicate,
+                    "object_type": s.object_type,
+                    "object_label": getattr(s, "object_label", None) or s.object_type,
+                }
+                for s in db.query(SchemaConstraint).filter(SchemaConstraint.project_id == project_id).all()
+            ]
+
+            checked = llm_quality_review(
+                triples_data, doc.md_content or "", cfg, threshold,
+                benchmark_content=benchmark_content,
+                custom_prompt=custom_prompt,
+                schema_list=schema_list,
+            )
 
             if task:
                 task.progress = 80
@@ -348,6 +410,7 @@ async def trigger_extraction(
     extraction_method: str = Form("LLM_PROMPT"),
     schema_ids: str = Form(""),
     script_id: str = Form(""),
+    custom_prompt: str = Form(""),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
@@ -365,7 +428,7 @@ async def trigger_extraction(
     db.add(task)
     db.commit()
 
-    background_tasks.add_task(_extract_triples_bg, doc_id, extraction_method, schema_uuid_list, doc.project_id, task.id, script_id)
+    background_tasks.add_task(_extract_triples_bg, doc_id, extraction_method, schema_uuid_list, doc.project_id, task.id, script_id, custom_prompt)
 
     return {"task_id": str(task.id), "status": "PENDING"}
 
@@ -376,6 +439,7 @@ async def trigger_quality_check(
     doc_id: UUID = Form(...),
     threshold: float = Form(None),
     benchmark_file: UploadFile = File(None),
+    custom_prompt: str = Form(""),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
@@ -418,9 +482,157 @@ async def trigger_quality_check(
     db.add(task)
     db.commit()
 
-    background_tasks.add_task(_quality_check_bg, doc_id, threshold, doc.project_id, task.id, benchmark_content)
+    background_tasks.add_task(_quality_check_bg, doc_id, threshold, doc.project_id, task.id, benchmark_content, custom_prompt)
 
     return {"task_id": str(task.id), "status": "PENDING", "threshold": threshold, "benchmark_uploaded": bool(benchmark_content)}
+
+
+# ====== 三元组消歧（需求5） ======
+
+@router.post("/disambiguate")
+async def disambiguate_triples(
+    body: DisambiguateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """LLM 三元组消歧（需求5）
+
+    对审核台中标记 needs_disambiguation 的三元组批量进行 LLM 消歧，
+    消歧结果生成独立新任务，新三元组以 PENDING 状态加入抽取列表排队等待质检。
+    """
+    if not body.triple_ids:
+        raise HTTPException(status_code=400, detail="triple_ids 不能为空")
+
+    triples = db.query(TripleRaw).filter(TripleRaw.id.in_(body.triple_ids)).all()
+    if not triples:
+        raise HTTPException(status_code=404, detail="未找到指定的三元组")
+
+    project_id = triples[0].project_id
+    task = TaskStatus(project_id=project_id, task_type="DISAMBIGUATION", status="PENDING")
+    db.add(task)
+    db.commit()
+
+    background_tasks.add_task(
+        _disambiguate_bg,
+        [str(t.id) for t in triples],
+        project_id,
+        task.id,
+        body.custom_prompt or "",
+    )
+    return {"task_id": str(task.id), "status": "PENDING"}
+
+
+def _disambiguate_bg(triple_ids: List[str], project_id: UUID, task_id: UUID, custom_prompt: str = ""):
+    """后台任务：对一批待消歧三元组运行 LLM 消歧（需求5）
+
+    流程:
+      1. 检索每个待消歧三元组的语义相似已有三元组（作为消歧上下文）
+      2. 调用 LLM 判定是否归一（MERGE）/保留（KEEP），输出规范三元组
+      3. 消歧结果写入新的 TripleRaw(PENDING) —— 进入抽取列表排队等待质检
+      4. 原始待消歧三元组标记为 DISAMBIGUATED，移出审核台待审队列
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        task = db.query(TaskStatus).filter(TaskStatus.id == task_id).first()
+        if task:
+            task.status = "RUNNING"
+            task.progress = 20
+            db.commit()
+            _broadcast(project_id, task_id, "DISAMBIGUATION", "RUNNING", 20)
+
+        triples = db.query(TripleRaw).filter(TripleRaw.id.in_([UUID(x) for x in triple_ids])).all()
+        if not triples:
+            if task:
+                task.status = "DONE"
+                task.progress = 100
+                task.result = {"disambiguated_count": 0, "new_triple_count": 0}
+            db.commit()
+            return
+
+        # 优先 DISAMBIGUATION 阶段 LLM，回退 VERIFICATION
+        cfg = get_llm_config_for_project(db, project_id, "DISAMBIGUATION")
+        if not cfg:
+            cfg = get_llm_config_for_project(db, project_id, "VERIFICATION")
+        if not cfg:
+            raise Exception("未配置 DISAMBIGUATION / VERIFICATION 阶段的 LLM，请先在配置页设置")
+
+        # 构建候选 + 相似已有三元组映射
+        existing = db.query(TripleRaw).filter(
+            TripleRaw.project_id == project_id,
+            TripleRaw.status.notin_(["REJECTED", "MERGED"]),
+        ).all()
+        existing_list = [
+            {"id": str(t.id), "subject": t.subject, "predicate": t.predicate, "object": t.object}
+            for t in existing
+        ]
+
+        # 若项目配置了向量模型，用向量语义相似度；否则回退词面相似度
+        embedder = make_embedder(db, project_id)
+        candidates = []
+        similar_map = {}
+        for t in triples:
+            cand = {
+                "id": str(t.id),
+                "subject": t.subject,
+                "predicate": t.predicate,
+                "object": t.object,
+                "confidence": t.llm_confidence,
+            }
+            candidates.append(cand)
+            similar_map[str(t.id)] = find_similar_triples(
+                cand, existing_list,
+                settings.DISAMBIGUATION_SIMILARITY_THRESHOLD,
+                embedder,
+                settings.EMBEDDING_SIMILARITY_THRESHOLD,
+            )
+
+        resolved = disambiguate_triples_with_llm(candidates, similar_map, cfg, custom_prompt)
+
+        # 消歧结果生成独立新三元组（PENDING），加入抽取列表排队等待质检
+        new_count = 0
+        for r in resolved:
+            new_triple = TripleRaw(
+                project_id=project_id,
+                task_id=task_id,
+                subject=r.get("subject", ""),
+                predicate=r.get("predicate", ""),
+                object=r.get("object", ""),
+                extraction_method="LLM_DISAMBIGUATION",
+                llm_confidence=r.get("confidence"),
+                chunk_text=(r.get("disambiguation_reason") or "")[:500],
+                status="PENDING",
+            )
+            db.add(new_triple)
+            new_count += 1
+
+        # 原始待消歧三元组标记为已消歧（移出审核台待审队列）
+        for t in triples:
+            t.status = "DISAMBIGUATED"
+
+        db.commit()
+        if task:
+            task.status = "DONE"
+            task.progress = 100
+            task.result = {
+                "disambiguated_count": len(triples),
+                "new_triple_count": new_count,
+            }
+        db.commit()
+        _broadcast(project_id, task_id, "DISAMBIGUATION", "DONE", 100,
+                   task.result if task else None)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.exception(f"三元组消歧任务失败 task_id={task_id}")
+        if task:
+            task.status = "FAILED"
+            task.error_message = str(e)
+        db.commit()
+        _broadcast(project_id, task_id, "DISAMBIGUATION", "FAILED", 0)
+    finally:
+        db.close()
 
 
 @router.get("/triples/{project_id}/stats")

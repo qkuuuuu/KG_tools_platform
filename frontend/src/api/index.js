@@ -51,6 +51,7 @@ export const projectApi = {
 export const llmConfigApi = {
   list: (projectId) => api.get(`/projects/${projectId}/llm-configs`),
   update: (projectId, configs) => api.put(`/projects/${projectId}/llm-configs`, configs),
+  defaultPrompts: (projectId) => api.get(`/projects/${projectId}/llm-config-default-prompts`),
 }
 
 // ==================== 设备配置 ====================
@@ -84,21 +85,25 @@ export const docApi = {
 // ==================== 抽取 ====================
 export const extractApi = {
   engines: () => api.get('/data/engines'),
-  extract: (docId, method, schemaIds, scriptId) => {
+  extract: (docId, method, schemaIds, scriptId, customPrompt) => {
     const formData = new FormData()
     formData.append('doc_id', docId)
     formData.append('extraction_method', method)
     formData.append('schema_ids', schemaIds?.join(',') || '')
     if (scriptId) formData.append('script_id', scriptId)
+    if (customPrompt) formData.append('custom_prompt', customPrompt)
     return api.post('/data/extract', formData)
   },
-  qualityCheck: (docId, threshold, benchmarkFile) => {
+  qualityCheck: (docId, threshold, benchmarkFile, customPrompt) => {
     const formData = new FormData()
     formData.append('doc_id', docId)
     if (threshold !== undefined) formData.append('threshold', String(threshold))
     if (benchmarkFile) formData.append('benchmark_file', benchmarkFile)
+    if (customPrompt) formData.append('custom_prompt', customPrompt)
     return api.post('/data/quality-check', formData)
   },
+  disambiguate: (tripleIds, customPrompt) =>
+    api.post('/data/disambiguate', { triple_ids: tripleIds, custom_prompt: customPrompt || '' }),
   getTriples: (projectId, status, limit, taskId) => {
     let url = `/data/triples/${projectId}`
     const params = []
@@ -131,8 +136,8 @@ export const scriptApi = {
 
 // ==================== HITL ====================
 export const hitlApi = {
-  pending: (projectId, page = 1, pageSize = 20) =>
-    api.get(`/hitl/pending/${projectId}?page=${page}&page_size=${pageSize}`),
+  pending: (projectId, page = 1, pageSize = 20, ambiguousOnly = false) =>
+    api.get(`/hitl/pending/${projectId}?page=${page}&page_size=${pageSize}${ambiguousOnly ? '&ambiguous_only=true' : ''}`),
   reviewed: (projectId, params) => api.get(`/hitl/reviewed/${projectId}?${params}`),
   assigned: (username) => api.get(`/hitl/assigned/${username}`),
   assign: (tripleId, username) => api.post('/hitl/assign', null, { params: { triple_id: tripleId, username } }),

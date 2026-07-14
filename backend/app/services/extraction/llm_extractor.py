@@ -54,6 +54,7 @@ def extract_with_llm(
     cfg: Dict,
     chunk_size: int = 4000,
     max_schemas_in_prompt: int = 30,
+    custom_prompt: str = None,
 ) -> List[Dict]:
     """LLM Prompt 抽取三元组
 
@@ -68,9 +69,15 @@ def extract_with_llm(
         cfg: LLM 配置
         chunk_size: 分块大小
         max_schemas_in_prompt: prompt 中最大 schema 数量（避免 token 爆炸）
+        custom_prompt: 用户自定义 Prompt（需求2）。若提供，则替换默认抽取指令，
+                       但仍会自动追加 Schema 约束与输出格式要求，保证输出可解析。
     """
     if not md_content or not md_content.strip():
         return []
+
+    from app.services.default_prompts import DEFAULT_EXTRACTION_PROMPT
+    instruction = (custom_prompt.strip() if custom_prompt and custom_prompt.strip()
+                   else DEFAULT_EXTRACTION_PROMPT)
 
     # 智能裁剪 schema（按相关性/频率选择 TOP N）
     schema_display = schemas[:max_schemas_in_prompt]
@@ -84,8 +91,7 @@ def extract_with_llm(
         for s in schema_display
     ) if schema_display else "（无 Schema 约束，自由抽取实体及关系）"
 
-    system_prompt = f"""你是知识图谱三元组抽取专家。
-参考 OpenSPG KAG (Knowledge Augmented Generation) 设计理念，请严格遵循 Schema 约束从文本中抽取三元组。
+    system_prompt = f"""{instruction}
 
 Schema 约束（只抽取符合以下模式的关系）：
 {schema_desc}

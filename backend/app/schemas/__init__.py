@@ -42,11 +42,13 @@ class ProjectResponse(BaseModel):
 
 # ==================== LLM 配置 ====================
 class LLMConfigUpdate(BaseModel):
-    pipeline_stage: str  # PARSE_AUDIT / EXTRACTION / VERIFICATION / FUSION
+    pipeline_stage: str  # PARSE_AUDIT / EXTRACTION / VERIFICATION / FUSION / DISAMBIGUATION / EMBEDDING
     api_provider: str    # OPENAI / ANTHROPIC / DEEPSEEK / QWEN
     base_url: Optional[str] = None
     api_key: Optional[str] = None  # 允许不传 key（不更新已有 key）
     model_name: str
+    prompt: Optional[str] = None  # 自定义 Prompt（需求1）：为空则回退默认
+    enabled: bool = True  # 向量模型(EMBEDDING)开关：是否启用向量语义匹配
 
 
 class LLMConfigResponse(BaseModel):
@@ -55,6 +57,8 @@ class LLMConfigResponse(BaseModel):
     api_provider: str
     base_url: Optional[str] = None
     model_name: str
+    prompt: Optional[str] = None  # 自定义 Prompt（需求1）
+    enabled: bool = True  # 向量模型(EMBEDDING)开关
 
     class Config:
         from_attributes = True
@@ -163,6 +167,8 @@ class TripleResponse(BaseModel):
     status: str
     chunk_text: Optional[str]
     assigned_to: Optional[str]
+    needs_disambiguation: Optional[bool] = None
+    disambiguation_note: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -222,3 +228,11 @@ class ExtractRequest(BaseModel):
 class QualityCheckRequest(BaseModel):
     doc_id: UUID
     threshold: Optional[float] = None
+
+
+# ==================== 三元组消歧（需求4/5） ====================
+class DisambiguateRequest(BaseModel):
+    # 待消歧的三元组 ID 列表（来自审核台中 needs_disambiguation 标记的三元组）
+    triple_ids: List[UUID]
+    # 自定义消歧 Prompt（可选，覆盖默认 DISAMBIGUATION Prompt）
+    custom_prompt: Optional[str] = None

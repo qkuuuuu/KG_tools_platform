@@ -17,15 +17,22 @@ async def get_pending_triples(
     project_id: UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    ambiguous_only: bool = Query(False, description="仅返回待消歧(needs_disambiguation)的三元组"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """获取待审核三元组列表（分配式：未分配或分配给当前人的）"""
+    """获取待审核三元组列表（分配式：未分配或分配给当前人的）
+
+    ambiguous_only=true 时，仅返回入库前被标记为"语义相似需消歧"的三元组（需求4）。
+    """
     offset = (page - 1) * page_size
-    triples = db.query(TripleRaw).filter(
+    q = db.query(TripleRaw).filter(
         TripleRaw.project_id == project_id,
         TripleRaw.status == "PENDING",
-    ).order_by(TripleRaw.created_at.desc()).offset(offset).limit(page_size).all()
+    )
+    if ambiguous_only:
+        q = q.filter(TripleRaw.needs_disambiguation == True)  # noqa: E712
+    triples = q.order_by(TripleRaw.created_at.desc()).offset(offset).limit(page_size).all()
     return triples
 
 

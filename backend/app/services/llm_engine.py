@@ -28,6 +28,8 @@ def _get_llm_config(db, project_id: str, stage: str):
         "base_url": cfg.base_url,
         "api_key": decrypt_value(cfg.api_key_encrypted),
         "model_name": cfg.model_name,
+        "prompt": cfg.prompt or "",  # 自定义 Prompt（需求1/2），前端可编辑
+        "enabled": bool(getattr(cfg, "enabled", True)),  # 向量模型开关（需求4）：默认开启
     }
 
 
@@ -79,6 +81,7 @@ def extract_triples_with_llm(
     schemas: List[Dict],
     cfg: Dict,
     chunk_size: int = 3000,
+    custom_prompt: str = None,
 ) -> List[Dict]:
     """用 LLM 按 Schema 从 Markdown 中抽取三元组
     
@@ -234,6 +237,118 @@ def quality_check_with_llm(
 def get_llm_config_for_project(db, project_id: str, stage: str = "EXTRACTION"):
     """外部调用入口: 获取项目的 LLM 配置"""
     return _get_llm_config(db, project_id, stage)
+
+
+def get_embeddings(texts, cfg: Dict) -> List[List[float]]:
+    """调用 OpenAI 兼容的向量(Embedding)模型，返回每条文本的向量
+
+    用于「三元组入库前消歧」的向量语义相似度（需求4）。cfg 为 EMBEDDING
+    阶段的 LLM 配置（base_url / api_key / model_name）。
+
+    Args:
+        texts: 单个字符串或字符串列表
+        cfg: EMBEDDING 阶段配置
+    Returns:
+        与输入顺序一致的向量列表
+    """
+    if isinstance(texts, str):
+        texts = [texts]
+    # 过滤空文本，用占位空格代替，保证与输入等长对齐
+    clean = [(t if (t and t.strip()) else " ") for t in texts]
+    if not clean:
+        return []
+
+    client = _make_client(cfg)
+    resp = client.embeddings.create(model=cfg["model_name"], input=clean)
+    data = resp.data
+    # 兼容两种返回格式：
+    # 1) OpenAI 官方返回带 index 字段，且 index 按顺序 → 按 index 还原输入顺序（最稳妥）。
+    # 2) 部分 OpenAI 兼容服务不返回 index，或无序返回 → 若 index 不可靠，则信任服务
+    #    按输入顺序返回（绝大多数实现如此），直接按返回顺序映射即可（Python 切片保序）。
+    indices = [getattr(d, "index", None) for d in data]
+    if (
+        len(indices) == len(clean)
+        and all(isinstance(i, int) and 0 <= i < len(clean) for i in indices)
+        and len(set(indices)) == len(indices)
+    ):
+        ordered = [None] * len(clean)
+        for d, i in zip(data, indices):
+            ordered[i] = list(d.embedding)
+        return ordered
+    return [list(d.embedding) for d in data]
+
+
+def disambiguate_triples_with_llm(
+    candidates: List[Dict],
+    similar_map: Dict,
+    cfg: Dict,
+    custom_prompt: str = None,
+) -> List[Dict]:
+    """对一批待消歧三元组调用 LLM 进行消歧（需求5）
+
+    Args:
+        candidates: [{"id", "subject", "predicate", "object", "confidence"}]
+        similar_map: { triple_id: [语义相似的已有三元组...] }
+        cfg: LLM 配置（DISAMBIGUATION 阶段；回退 VERIFICATION）
+        custom_prompt: 用户自定义消歧 Prompt（可选）
+    Returns:
+        解析后的候选三元组（可能被 LLM 归一为规范表述），附带
+        disambiguation_decision / disambiguation_reason
+    """
+    if not candidates:
+        return []
+
+    from app.services.default_prompts import DEFAULT_DISAMBIGUATION_PROMPT
+    instruction = (custom_prompt.strip() if custom_prompt and custom_prompt.strip()
+                   else DEFAULT_DISAMBIGUATION_PROMPT)
+
+    results = list(candidates)
+    for batch_start in range(0, len(results), 10):
+        batch = results[batch_start:batch_start + 10]
+
+        cand_text = "\n".join(
+            f"{i}. 待消歧: ({c.get('subject')}, {c.get('predicate')}, {c.get('object')}) [confidence={c.get('confidence')}]"
+            for i, c in enumerate(batch)
+        )
+        sim_text = ""
+        for i, c in enumerate(batch):
+            sims = similar_map.get(str(c.get("id", "")), [])[:5]
+            if sims:
+                sim_text += f"\n[{i}] 语义相似的已有三元组:\n"
+                for s in sims:
+                    sim_text += f"   - ({s.get('subject')}, {s.get('predicate')}, {s.get('object')}) 相似度={s.get('similarity')}\n"
+
+        user_prompt = f"""待消歧三元组：
+{cand_text}
+{sim_text}
+请逐条判断并输出消歧结果。"""
+
+        try:
+            response = _call_llm(cfg, instruction, user_prompt, temperature=0.0)
+            response = re.sub(r"```json\s*", "", response)
+            response = re.sub(r"```\s*", "", response)
+            start = response.find("[")
+            end = response.rfind("]")
+            if start >= 0 and end > start:
+                decisions = json.loads(response[start:end + 1])
+                for d in decisions:
+                    idx = d.get("index", 0)
+                    if not isinstance(idx, int):
+                        continue
+                    actual = batch_start + idx
+                    if 0 <= actual < len(results):
+                        decision = d.get("decision", "KEEP")
+                        if decision == "MERGE":
+                            results[actual]["subject"] = d.get("subject", results[actual]["subject"])
+                            results[actual]["predicate"] = d.get("predicate", results[actual]["predicate"])
+                            results[actual]["object"] = d.get("object", results[actual]["object"])
+                        results[actual]["disambiguation_decision"] = decision
+                        results[actual]["disambiguation_reason"] = d.get("reason", "")
+        except Exception:
+            continue
+
+    return results
+
 
 
 def call_llm_api(cfg: Dict, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:

@@ -10,6 +10,7 @@ from uuid import UUID
 from app.database import get_db
 from app.models import Document, TaskStatus, User
 from app.utils.security import get_current_user, require_admin
+from app.utils.http import attachment_filename
 from app.config import settings
 from app.services.parsers import parse_document
 
@@ -237,7 +238,7 @@ async def download_markdown(
         content=doc.md_content.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="{download_name}"',
+            "Content-Disposition": attachment_filename(download_name),
         },
     )
 
