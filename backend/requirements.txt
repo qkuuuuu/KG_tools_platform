@@ -32,10 +32,10 @@ rdflib>=7.0
 # NER / Extraction (heavy — 默认开启；如仅需部分引擎可注释对应行)
 spacy>=3.7
 gliner>=0.1
-# 显式 pin scipy 到带 cp311 manylinux 预编译 wheel 的版本（1.11.4）。
-# 原因：scipy <=1.9.1 没有 cp311 的预编译 wheel，只有 sdist（源码包），
+# 显式 pin scipy 到带 cp310 manylinux 预编译 wheel 的版本（1.11.4）。
+# 原因：scipy <=1.9.1 没有 cp310 的预编译 wheel，只有 sdist（源码包），
 # 在 slim 镜像里必须从源码编译；若缺少编译工具/工具链不兼容就会构建失败。
-# 1.11.4 同时具备 cp311 wheel 且兼容本项目的传递依赖（spaCy / Paddle / MinerU 等）。
+# 1.11.4 同时具备 cp310 wheel 且兼容本项目的传递依赖（spaCy / Paddle / MinerU 等）。
 # 注：本项目后端代码不直接 import scipy，这里仅用于满足上述重依赖的传递要求。
 scipy==1.11.4
 # ---- Paddle 全家桶 (GPU 版, T4) ----

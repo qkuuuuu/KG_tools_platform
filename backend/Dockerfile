@@ -1,7 +1,7 @@
 # ============================================================
 # KG Platform Backend Dockerfile
 # ============================================================
-FROM python:3.11-slim
+FROM python:3.10.9-slim
 
 # ============================================================
 # 模型缓存统一根目录
@@ -24,6 +24,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev build-essential gfortran curl \
     && rm -rf /var/lib/apt/lists/*
+
+# 关闭可能存在的"强制哈希校验"(部分加固版基础镜像在 /etc/pip.conf 开启了
+# require-hashes=true)。本项目的 requirements.txt 采用版本约束而非哈希锁版，
+# 若开启哈希校验，连 wrapt 这类传递依赖都会因无 --hash 而安装失败。
+# ENV 优先级高于 pip.conf，可覆盖镜像内配置。
+ENV PIP_REQUIRE_HASHES=false
 
 # Python 依赖（单独一层，利用 Docker 缓存）
 COPY requirements.txt .
