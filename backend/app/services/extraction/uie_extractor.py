@@ -13,8 +13,12 @@ GitHub: https://github.com/PaddlePaddle/PaddleNLP
   2. Taskflow 关系抽取 (嵌套 schema)
   3. spacy NER 降级 (无 PaddleNLP)
 """
+import os
 import re
+import sys
+import json
 import traceback
+import subprocess
 from typing import List, Dict, Optional, Any
 from app.config import settings
 
@@ -24,7 +28,7 @@ _TASKFLOW_ENTITY = None
 _TASKFLOW_RELATION = None
 
 
-def extract_with_uie(
+def _extract_with_uie_impl(
     md_content: str,
     schemas: List[Dict],
     model_name: str = "uie-base",
@@ -525,3 +529,70 @@ def _split_text_chunks(text: str, max_len: int = 450) -> List[str]:
     if current:
         chunks.append(current)
     return chunks if chunks else [text[:max_len]]
+
+
+def extract_with_uie(
+    md_content: str,
+    schemas: List[Dict],
+    model_name: str = "uie-base",
+    threshold: float = 0.5,
+    cfg: Optional[Dict] = None,
+    use_gpu: bool = False,
+    gpu_id: int = 0,
+    **kwargs,
+) -> List[Dict]:
+    """UIE 统一信息抽取（子进程隔离版，对外暴露的原接口）。
+
+    为什么子进程隔离: PaddleNLP(Paddle) 使用 Intel OpenMP(libiomp5)，
+    与 numpy/torch 的 GNU OpenMP(libgomp) 同进程会触发 free(): invalid pointer /
+    SIGABRT，且该信号 Python 无法捕获，会直接杀掉整个 FastAPI worker。
+    这里把真正的模型推理(_extract_with_uie_impl)放到独立子进程(uie_runner)执行，
+    即使 Paddle 崩溃也只杀子进程，worker 不受影响，其余引擎照常工作。
+
+    签名与旧版完全一致，extraction/__init__.extract_triples 无需改动。
+    """
+    runner = os.path.join(os.path.dirname(__file__), "uie_runner.py")
+    if not os.path.exists(runner):
+        raise RuntimeError("UIE 运行脚本缺失(uie_runner.py)，无法使用该引擎。")
+
+    args = {
+        "md_content": md_content,
+        "schemas": schemas,
+        "model_name": model_name,
+        "threshold": threshold,
+        "use_gpu": use_gpu,
+        "gpu_id": gpu_id,
+    }
+    env = os.environ.copy()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.services.extraction.uie_runner",
+             json.dumps(args, ensure_ascii=False)],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 分钟超时
+            cwd="/app",
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("UIE 抽取超时(>600s)")
+
+    # runner 把结果 JSON 打印到 stdout 的某一行；其余为库日志噪声。
+    result_json = None
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            result_json = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+    if proc.returncode != 0 or result_json is None:
+        err = (result_json or {}).get("error") if isinstance(result_json, dict) else None
+        detail = err or (proc.stderr or "")[-500:] or f"UIE 子进程退出码 {proc.returncode}"
+        raise RuntimeError(f"UIE 抽取失败: {detail}")
+    if "error" in result_json:
+        raise RuntimeError(f"UIE 抽取失败: {result_json['error']}")
+
+    return result_json.get("triples", [])

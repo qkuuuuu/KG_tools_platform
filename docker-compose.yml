@@ -6,11 +6,11 @@
 # 日志: docker compose logs -f backend-api
 # 重建: docker compose up -d --build
 #
-# 端口映射:
-#   - 80:   Vue 前端 (Nginx)
-#   - 8000: FastAPI 后端 (Swagger UI: http://server-ip:8000/docs)
-#   - 5432: PostgreSQL
-#   - 7474 / 7687: Neo4j (按需启动: --profile full)
+# 端口映射（宿主端口均在原始端口前加 1，避免与本机其它实例冲突）:
+#   - 180:    Vue 前端 (Nginx)
+#   - 18000:  FastAPI 后端 (Swagger UI: http://server-ip:18000/docs)
+#   - 25432:  PostgreSQL
+#   - 17474 / 17687: Neo4j (按需启动: --profile full)
 #
 # 所有敏感配置通过 .env 文件注入，请勿将 .env 提交到 Git
 # ============================================================
@@ -28,7 +28,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在.env中设置POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-kg_platform}
     ports:
-      - "5432:5432"
+      # 改为 25432（已确认空闲且与对方端口段错开），仅影响宿主机外部访问端口；
+      # 容器间仍走内部 5432，后端 DATABASE_URL 使用 postgres-db:5432 不受影响。
+      - "25432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -50,9 +52,11 @@ services:
       NEO4J_apoc_import_file_enabled: "true"
       NEO4J_apoc_import_file_use__neo4j__config: "true"
       NEO4J_PLUGINS: '["apoc"]'
+    # 宿主端口统一在原始端口前加 "1"（17474/17687），避免与本机其它 neo4j 实例冲突。
+    # 容器内部仍是 7474/7687，后端用 bolt://neo4j-graph:7687 不受影响。
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "17474:7474"
+      - "17687:7687"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -82,7 +86,7 @@ services:
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: "50"
     ports:
-      - "8000:8000"
+      - "18000:8000"
     volumes:
       - uploads-data:/app/uploads
       # 注意: 模型已随镜像打包在 /opt/models，不要再挂卷到 /root/.cache，
@@ -109,7 +113,7 @@ services:
     container_name: kg-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "180:80"
     depends_on:
       backend-api:
         condition: service_healthy

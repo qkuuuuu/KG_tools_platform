@@ -1,0 +1,6 @@
+# 占位文件：离线模型包目录。
+# 使用方法见同目录的 download_models_host.sh（在能联网的机器上运行），
+# 它会把各引擎模型下载到本目录下的 .paddleocr / .paddlenlp / .cache 等子目录，
+# 然后 `docker compose build` 时由 Dockerfile 的 `COPY models_offline/ /opt/models/`
+# 整体拷进镜像，构建期/运行期均不再联网下载。
+# 本文件仅为让空目录可被 git 跟踪，对镜像无影响，可忽略。

@@ -17,3 +17,9 @@ check_*.py
 reset_pw.py
 init_admin.py
 .alembic
+# 宿主下载脚本已废弃（改为 docker 构建期下载）；构建上下文不应带入
+download_models_host.sh
+download_models_host.py
+# 防止误把本地虚拟环境打进镜像（极大膨胀构建上下文）
+.venv
+venv

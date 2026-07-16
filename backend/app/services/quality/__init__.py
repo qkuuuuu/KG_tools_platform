@@ -19,6 +19,74 @@ def _call_llm_for_quality(cfg: Dict, system_prompt: str, user_prompt: str) -> st
     return resp.choices[0].message.content
 
 
+# ---------------------------------------------------------------------------
+# 质检评分 / verdict 归一化辅助（对齐 DEFAULT_VERIFICATION_PROMPT 的评分标准）
+# ---------------------------------------------------------------------------
+
+# 评分区间（与 VERIFICATION 评分标准保持一致）：
+#   90-100 完全正确；70-89 基本正确；40-69 存在怀疑点；0-39 明显错误/幻觉
+_SCORE_PASS_FLOOR = 90.0
+_SCORE_BASIC_CORRECT_FLOOR = 70.0
+_SCORE_REJECT_FLOOR = 40.0
+
+# verdict 别名归一化（兼容 LLM 返回中文 / 大小写不一致）
+_VERDICT_ALIASES = {
+    "pass": "PASS", "通过": "PASS", "正确": "PASS", "true": "PASS",
+    "reject": "REJECT", "拒绝": "REJECT", "不通过": "REJECT", "错误": "REJECT", "false": "REJECT",
+    "uncertain": "UNCERTAIN", "待定": "UNCERTAIN", "不确定": "UNCERTAIN", "存疑": "UNCERTAIN",
+}
+
+
+def _coerce_score(value, default: float = 50.0) -> float:
+    """把 LLM 返回的 quality_score 转成受限于 [0,100] 的 float。
+
+    历史缺陷：原始实现直接 ``r.get("quality_score", 50)``，若模型返回字符串
+    （如 ``"88"``）或越界值，下游 ``score >= threshold`` 比较会出错 / 误判。
+    """
+    if isinstance(value, bool):
+        return float(default)
+    if isinstance(value, (int, float)):
+        try:
+            s = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+    else:
+        try:
+            s = float(str(value).strip())
+        except (TypeError, ValueError):
+            return float(default)
+    return max(0.0, min(100.0, s))
+
+
+def _normalize_verdict(verdict_raw, score: float) -> str:
+    """归一化 LLM 返回的 verdict。
+
+    - 显式 ``REJECT``（含中文「拒绝/不通过/错误」）始终尊重：视为幻觉 / 明显错误，拒绝入库；
+    - 其余（PASS / UNCERTAIN / 缺失 / 无法识别）统一按评分区间推导，确保与
+      VERIFICATION 评分标准一致：基本正确(>=70) → PASS；怀疑(40-69) → UNCERTAIN；错误(<40) → REJECT。
+
+    历史缺陷：原始实现要求 LLM 必须显式返回 ``"PASS"`` 才算通过，且 ``llm_quality_review``
+    的 system_prompt 又规定「评分 < 90 视为待定(UNCERTAIN)」，二者自相矛盾。结果是大量
+    「基本正确」（评分 70-89，LLM 据此返回 UNCERTAIN）的三元组既非 PASS 也非 REJECT，
+    只能停留在 PENDING（人工待审），最终表现为极低通过率（如线上观察到的 490→40）。
+    修复：凡评分属于「基本正确」区间即视为通过。
+    """
+    explicit = None
+    if verdict_raw is not None:
+        key = str(verdict_raw).strip().lower()
+        if key in _VERDICT_ALIASES:
+            explicit = _VERDICT_ALIASES[key]
+    # 显式拒绝始终尊重（幻觉 / 明显错误）
+    if explicit == "REJECT":
+        return "REJECT"
+    # 其余按评分区间推导（对齐评分标准：70-89 基本正确 -> 通过）
+    if score >= _SCORE_BASIC_CORRECT_FLOOR:
+        return "PASS"
+    if score >= _SCORE_REJECT_FLOOR:
+        return "UNCERTAIN"
+    return "REJECT"
+
+
 def llm_quality_review(
     triples: List[Dict],
     md_content: str,
@@ -105,21 +173,75 @@ def llm_quality_review(
             end = response.rfind("]")
             if start >= 0 and end > start:
                 reviews = json.loads(response[start:end + 1])
-                for r in reviews:
-                    idx = r.get("index", 0)
-                    # 确保 idx 是 batch 内的局部索引
-                    if not (isinstance(idx, int) and 0 <= idx < len(batch)):
-                        continue
-                    actual_idx = batch_start + idx
-                    if actual_idx < len(results):
-                        results[actual_idx]["quality_score"] = r.get("quality_score", 50)
-                        results[actual_idx]["verdict"] = r.get("verdict", "UNCERTAIN")
-                        results[actual_idx]["quality_reason"] = r.get("reason", "")
-                        # 更新 confidence 为质检分数
-                        results[actual_idx]["confidence"] = r.get("quality_score", 50)
-                        results[actual_idx]["llm_confidence"] = r.get("quality_score", 50)
+            else:
+                reviews = []
         except Exception:
-            continue
+            reviews = []
+
+        # 建立 index -> review 映射；兼容 1-based、缺失 index、越界 index：
+        #  - 历史缺陷：``r.get("index", 0)`` 在 index 缺失时默认 0，会把多条 review 错误覆盖到
+        #    第 0 条；且 ``0 <= idx < len(batch)`` 会直接丢弃 idx == len(batch) 的末条（常见于
+        #    LLM 用 1-based 编号），造成整批评分错位 / 漏评，最终大量三元组拿不到有效 verdict。
+        indexed, unindexed = [], []
+        for r in reviews:
+            if not isinstance(r, dict):
+                continue
+            raw = r.get("index", None)
+            if raw is None:
+                unindexed.append(r)
+            else:
+                try:
+                    indexed.append((int(raw), r))
+                except (TypeError, ValueError):
+                    unindexed.append(r)
+
+        # 判定 1-based：若所有带 index 的评审最大编号 == len(batch)（0-based 下最大应为 len-1），
+        # 则可判定 LLM 采用了 1-based 编号，整体偏移 -1。
+        if indexed:
+            max_idx = max(i for i, _ in indexed)
+            min_idx = min(i for i, _ in indexed)
+            offset = -1 if (max_idx == len(batch) and min_idx >= 1) else 0
+        else:
+            offset = 0
+
+        by_pos = {}
+        for raw, r in indexed:
+            pos = raw + offset
+            if 0 <= pos < len(batch):
+                by_pos[pos] = r  # 后者覆盖前者
+
+        # 缺失 index 的评审，按出现顺序填入尚未被占用的位置
+        free = [p for p in range(len(batch)) if p not in by_pos]
+        for r, p in zip(unindexed, free):
+            by_pos[p] = r
+
+        for pos, r in by_pos.items():
+            actual_idx = batch_start + pos
+            if actual_idx >= len(results):
+                continue
+            score = _coerce_score(r.get("quality_score"))
+            verdict = _normalize_verdict(r.get("verdict"), score)
+            results[actual_idx]["quality_score"] = score
+            results[actual_idx]["verdict"] = verdict
+            results[actual_idx]["quality_reason"] = r.get("reason", "")
+            # 更新 confidence 为质检分数
+            results[actual_idx]["confidence"] = score
+            results[actual_idx]["llm_confidence"] = score
+
+        # 兜底：本批次未匹配到任何 review 的三元组，写入原始置信度并派生 verdict，
+        # 避免下游（路由 PASS/FAIL 判定）因缺失字段而 KeyError 或误判为低分。
+        for pos in range(len(batch)):
+            actual_idx = batch_start + pos
+            if actual_idx >= len(results):
+                break
+            t = results[actual_idx]
+            if "quality_score" not in t:
+                base = _coerce_score(t.get("confidence", t.get("llm_confidence", 50.0)))
+                t["quality_score"] = base
+                t["verdict"] = _normalize_verdict(None, base)
+                t["quality_reason"] = t.get("quality_reason", "")
+                t["confidence"] = base
+                t["llm_confidence"] = base
 
     return results
 
@@ -153,10 +275,12 @@ def rule_based_quality(triples: List[Dict]) -> List[Dict]:
         if re.match(r"^\d+$", obj):
             reasons.append("宾语为纯数字，可能不完整")
 
-        # 规则2: 纯标点/特殊字符
-        if re.match(r'^[\s\!\"\#\$\%\&\'\(\)\*\+\,\-\.\/\:\;\<\=\>\?\@\[\]\^\_\`\{\|\}\~\\]+$', subj):
+        # 规则2: 纯标点/特殊字符（兼容 ASCII 与全角/CJK 标点）
+        _punct_ascii = r'^[\s\!\"\#\$\%\&\'\(\)\*\+\,\-\.\/\:\;\<\=\>\?\@\[\]\^\_\`\{\|\}\~\\]+$'
+        _punct_cjk = r'^[\s\u3000-\u303f\uff00-\uffef]+$'
+        if re.match(_punct_ascii, subj) or re.match(_punct_cjk, subj):
             reasons.append("主语仅为标点符号")
-        if re.match(r'^[\s\!\"\#\$\%\&\'\(\)\*\+\,\-\.\/\:\;\<\=\>\?\@\[\]\^\_\`\{\|\}\~\\]+$', obj):
+        if re.match(_punct_ascii, obj) or re.match(_punct_cjk, obj):
             reasons.append("宾语仅为标点符号")
 
         # 规则3: 主语=宾语但非自反

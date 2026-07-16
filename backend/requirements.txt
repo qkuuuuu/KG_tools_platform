@@ -12,7 +12,10 @@ python-dotenv>=1.0
 # Auth
 PyJWT>=2.8
 passlib[bcrypt]>=1.7
-bcrypt>=4.0
+# 锁 4.0.1：bcrypt>=4.1 移除了 bcrypt.__about__，passlib 1.7.4 在 import 时会
+# AttributeError: module 'bcrypt' has no attribute '__about__'，进而使 init_db.py 建管理员失败。
+# 4.0.1 仍保留该属性且与 passlib 1.7.4 兼容；bcrypt 72 字节密码上限由 passlib 正常处理。
+bcrypt==4.0.1
 
 # Encryption
 cryptography>=42.0
@@ -31,23 +34,56 @@ rdflib>=7.0
 
 # NER / Extraction (heavy — 默认开启；如仅需部分引擎可注释对应行)
 spacy>=3.7
+# spacy-pkuseg：中文模型 zh_core_web_sm 的分词后端(pkuseg)，缺失会导致
+# spacy.load("zh_core_web_sm") 报 "spacy-pkuseg not installed"。需与 spacy 主版本匹配(spacy 3.x → 0.0.33)。
+spacy-pkuseg>=0.0.33
 gliner>=0.1
+# simplejson：ModelScope(modelscope) 运行期依赖，缺失会导致 DeepKE/UIE 等
+# 走 modelscope 的引擎 import 失败(ModuleNotFoundError: No module named 'simplejson')。
+simplejson>=3.0
 # 显式 pin scipy 到带 cp310 manylinux 预编译 wheel 的版本（1.11.4）。
 # 原因：scipy <=1.9.1 没有 cp310 的预编译 wheel，只有 sdist（源码包），
 # 在 slim 镜像里必须从源码编译；若缺少编译工具/工具链不兼容就会构建失败。
 # 1.11.4 同时具备 cp310 wheel 且兼容本项目的传递依赖（spaCy / Paddle / MinerU 等）。
 # 注：本项目后端代码不直接 import scipy，这里仅用于满足上述重依赖的传递要求。
 scipy==1.11.4
+# 显式锁定 numpy / opencv，消除 scipy 与 torch/mineru/paddle 之间的版本漂移冲突:
+#   - scipy==1.11.4 要求 numpy<1.28.0,>=1.21.6（这是本环境对 numpy 的唯一硬上限）；
+#     而 torch 2.6 / mineru 3.4.4 / opencv 4.11 / paddle 2.6 均不约束 numpy 上限。
+#     若不锁死，pip 可能将 numpy 解析到 2.x，撞 scipy 的 <1.28 约束，导致整个构建失败。
+#   - numpy==1.26.4 是该区间内最稳的版本（带 cp310 manylinux 预编译 wheel，
+#     且与 torch 2.6 / paddlepaddle-gpu 2.6 / opencv-python 4.11 / paddleocr 2.x 全部兼容）。
+#   - opencv-python 钉到 4.11.0.86（即 mineru 的下限），避免后续解析拉到要求 numpy>=2.0 的
+#     新版 opencv，从而反过来逼迫 numpy 升级、破坏 scipy 约束。保持构建确定性。
+#   注：opencv-python（非 headless）运行期需要 libGL，Dockerfile 已装 libgl1 解决。
+numpy==1.26.4
+opencv-python==4.11.0.86
 # ---- Paddle 全家桶 (GPU 版, T4) ----
 # 版本号对齐已验证可用的组合:
-#   paddle2onnx 2.1.0 / paddlefsl 1.1.0 / paddlenlp 2.6.1 / paddleocr 3.6.0 / paddlepaddle-gpu 2.6.2
+#   paddle2onnx 2.1.0 / paddlefsl 1.1.0 / paddlenlp 2.6.1 / paddleocr 2.x / paddlepaddle-gpu 2.6.2
 # 注意: PaddlePaddle 稳定版最高仅 2.6.x（3.0 仅有 paddlenlp 的 beta），故统一用 >=2.6.0
+# 注意: paddleocr 固定到 2.x（经典 PP-OCRv4），不要用 3.x！
+#   原因: paddleocr 3.x (PP-OCRv5) 经 paddlex 强依赖 aistudio-sdk>=0.3.5，
+#   而 PaddleNLP 的 Taskflow 下载模型需要 aistudio_sdk.hub.download（该接口在 0.3.0+ 已被删除，
+#   PaddleNLP 必须用 aistudio-sdk==0.2.6）。两者对 aistudio-sdk 的版本要求互相排斥，
+#   同处一个环境无法共存。paddleocr 2.x 走经典 PP-OCRv4、不依赖 paddlex，
+#   后端 parsers.py 用的也是经典 API(PaddleOCR(use_angle_cls=True, lang='ch').ocr(...))，
+#   与 2.x 完全兼容，因此降到 2.x 即可让 aistudio-sdk==0.2.6 同时满足两边、无冲突。
 paddle2onnx>=2.1.0
 paddlefsl>=1.1.0
 paddlenlp>=2.6.0
 paddlepaddle-gpu>=2.6.0
-paddleocr>=3.5.0
+paddleocr>=2.7,<3.0
+# PaddleNLP 的 Taskflow 下载模型依赖 aistudio_sdk.hub.download（0.3.0+ 已删除），
+# 必须锁 0.2.6。paddleocr 2.x 不依赖 paddlex，故此处与 paddleocr 不再冲突。
+aistudio-sdk==0.2.6
 modelscope>=1.14
+# ModelScope / DeepKE 运行期需要 addict（其 setup 未显式声明，部分解析下不自动装），
+# 这里显式声明，避免运行时 RaNER pipeline 报 No module named 'addict'。
+addict
+# sortedcontainers：ModelScope RaNER / JsonPlus 格式依赖，缺失会 ModuleNotFoundError:
+# No module named 'sortedcontainers'（modelscope/fileio/format/jsonplus.py）。
+sortedcontainers
 # ---- PyTorch (CUDA 构建, 供 gliner / mineru / DeepKE / spaCy-transformer 使用 GPU) ----
 # 必须显式 pin 到 +cu124 本地版本: 否则 pip 会优先选 PyPI 上的 CPU 版 torch, GPU 失效
 # 注意: torch 必须 >=2.6，因为 mineru 3.x 要求 torch>=2.6（其 pipeline/vlm extra 显式约束）。

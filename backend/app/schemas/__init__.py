@@ -233,6 +233,6 @@ class QualityCheckRequest(BaseModel):
 # ==================== 三元组消歧（需求4/5） ====================
 class DisambiguateRequest(BaseModel):
     # 待消歧的三元组 ID 列表（来自审核台中 needs_disambiguation 标记的三元组）
-    triple_ids: List[UUID]
+    triple_ids: list[UUID]
     # 自定义消歧 Prompt（可选，覆盖默认 DISAMBIGUATION Prompt）
     custom_prompt: Optional[str] = None

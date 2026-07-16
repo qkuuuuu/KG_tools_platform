@@ -294,6 +294,24 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
 ---
 
+## 模型可用性状态（构建期预下载）
+
+镜像在构建期由 `backend/predownload_models.py` 预下载下列模型（缓存统一位于 `/opt/models`，由 Dockerfile 的 `HF_HOME` / `MODELSCOPE_CACHE` / `PADDLENLP_HOME` 指定）。构建日志见 `kg_build.log`。**任一模型构建期失败都不会中断镜像构建**——对应引擎会在运行时首次使用时自动回退下载。
+
+| 模型 / 引擎 | 来源 | 构建期状态 | 说明 |
+|---|---|---|---|
+| spaCy `en_core_web_sm` | GitHub Releases | ✅ 成功 | 英文分词 / NER |
+| spaCy `zh_core_web_sm` | GitHub Releases | ✅ 成功 | 中文分词 / NER |
+| GLiNER `urchade/gliner_base` | HuggingFace 镜像 (hf-mirror.com) | ✅ 成功 | 零样本抽取（首次连接超时，重试后成功） |
+| DeepKE RaNER (`iic/nlp_raner_..._chinese-base-generic`) | ModelScope | ✅ 成功 | 中文命名实体识别 |
+| PaddleOCR PP-OCRv4 | PaddleNLP | ❌ 失败 | 子进程崩溃（退出码 -6 / `free(): invalid pointer`）；运行时首次使用自动回退下载 |
+| UIE `uie-base-zh` | PaddleNLP | ❌ 失败 | 同上，子进程崩溃（退出码 -6）；运行时首次使用自动回退下载 |
+| MinerU 模型 | ModelScope | ❌ 失败 | `mineru-models-download` 为交互式命令，非交互构建期无法应答（退出码 1/2）；运行时首次解析自动下载 |
+
+> **结论**：构建失败不影响镜像产出。PaddleOCR / UIE / MinerU 三类模型均会在**首次实际使用时由对应引擎自动回退下载**；若服务器无法访问 `hf-mirror.com` 与 `modelscope.cn`，这些引擎的首次解析会较慢或失败。
+
+---
+
 ## 日常运维
 
 ```bash
@@ -330,4 +348,34 @@ docker compose exec postgres-db pg_dump -U postgres kg_platform > backup_$(date 
 
 本项目为内部私有项目，暂不开放源代码与许可证授权。
 
-最后更新：2026-07-13（新增 KAG 智能助手章节）
+---
+
+## 单元测试与质检逻辑
+
+后端测试位于 `backend/tests/`，使用 pytest，**完全离线**（重型模型库惰性 import，假 LLM / 假 DB 替身，见 `tests/conftest.py`）。
+
+```bash
+cd backend
+python3 -m pytest tests/test_quality_module.py -q   # 质检模块：规则校验 + LLM 评审（完整用例）
+python3 -m pytest tests/test_quality.py -q          # 质检冒烟测试
+```
+
+### 质检模块缺陷修复（「490 条仅 40 条通过」低通过率）
+
+定位并修复了 `backend/app/services/quality/__init__.py` 中导致大量三元组无法通过质检的具体缺陷（详见 `tests/test_quality_module.py` 用例，覆盖数据校验规则、格式要求、边界条件与 490→40 复现）：
+
+1. **索引映射错乱（最严重）**：`llm_quality_review` 用 `r.get("index", 0)` 取评审序号，index 缺失时默认落到第 0 条（多条评审互相覆盖）；且 `0 <= idx < len(batch)` 会直接丢弃 `idx == len(batch)` 的末条（LLM 常用 1-based 编号），导致整批评分错位 / 漏评。
+2. **评分类型 / 区间未校验**：`quality_score` 为字符串或越界值时污染下游 `score >= threshold` 比较。
+3. **verdict 与评分标准不对齐**：VERIFICATION 评分标准把 **70–89 定义为「基本正确」**，但旧逻辑要求 LLM 必须显式返回 `PASS` 才算通过，且 `system_prompt` 又规定「<90 视为待定(UNCERTAIN)」。结果大量「基本正确」三元组既非 PASS 也非 REJECT，只能停留在 PENDING（人工待审），表现为极低通过率（线上曾观测到 490→40）。
+4. **漏评兜底缺失**：未匹配到评审的三元组拿不到 `quality_score` / `verdict`，下游路由回退到抽取置信度或直接 KeyError。
+
+**修复后行为**：
+
+- 兼容 **0-based / 1-based / 缺失 index**（1-based 整体 -1 修正；缺失 index 按顺序填入空位）；
+- `quality_score` 强制转 `float` 并截断到 `[0,100]`；
+- verdict 归一化（中英文 / 大小写）：**显式 `REJECT` 始终尊重**（幻觉 / 明显错误），其余按评分推导——**「基本正确」(≥70) → PASS**，怀疑(40–69) → UNCERTAIN（人工复核），错误(<40) → REJECT；
+- 未匹配评审的三元组用原始置信度兜底并派生 verdict，不再漏字段。
+
+> **调优提示**：由于「基本正确」(70–89) 已按评分标准判为 PASS，`CONFIDENCE_THRESHOLD`（默认 90）对通过判定的实际影响仅限于「完全正确」的边界，阈值不再作为硬性闸门。如需更严格的入库口径，应直接调低 `_SCORE_BASIC_CORRECT_FLOOR`（见 `quality/__init__.py`），而非仅调高 `CONFIDENCE_THRESHOLD`。
+
+最后更新：2026-07-16（新增模型可用性状态表；修复质检模块低通过率缺陷并补充单元测试）

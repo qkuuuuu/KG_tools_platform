@@ -4,6 +4,7 @@
 import os
 import re
 import time
+import json
 import logging
 import tempfile
 import subprocess
@@ -65,70 +66,53 @@ def parse_with_paddleocr(file_path: str) -> Tuple[str, float]:
     """用 PaddleOCR 解析扫描件/图片/扫描版 PDF，返回 (markdown, 质量评分)
 
     PaddleOCR 支持中文 OCR，可处理纯图像、扫描件、扫描版 PDF、发票等。
-    安装: pip install paddlepaddle paddleocr
+
+    实现说明: Paddle 使用 Intel OpenMP(libiomp5)，与 numpy/opencv/torch 的 GNU OpenMP
+    同进程会触发 free(): invalid pointer / SIGABRT，且该信号 Python 无法捕获。
+    因此这里通过 subprocess 调用独立的 paddleocr_runner.py 完成推理：
+    即使 Paddle 崩溃也只杀子进程，本 worker 不受影响，其余引擎照常工作。
     """
+    runner = os.path.join(os.path.dirname(__file__), "paddleocr_runner.py")
+    if not os.path.exists(runner):
+        raise RuntimeError("PaddleOCR 运行脚本缺失(paddleocr_runner.py)，无法使用该引擎。")
+
+    env = os.environ.copy()
     try:
-        from paddleocr import PaddleOCR
-    except ImportError:
-        raise RuntimeError(
-            "PaddleOCR 解析引擎未部署：请执行 `pip install paddlepaddle paddleocr` 并重启服务。"
-            "首次运行会自动下载中文 OCR 模型（需联网）。"
+        proc = subprocess.run(
+            [sys.executable, runner, file_path],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 分钟超时
+            env=env,
         )
-    import fitz  # PyMuPDF 用于将 PDF 页面转为图片
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("PaddleOCR 解析超时(>300s)")
 
-    # 初始化 PaddleOCR（中文 + 角度分类）
-    ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
-
-    parts = []
-    ext = os.path.splitext(file_path)[1].lower()
-
-    if ext == '.pdf':
-        # PDF: 逐页转图片后 OCR
-        doc = fitz.open(file_path)
-        for i, page in enumerate(doc, 1):
-            # 渲染页面为图片 (DPI=200 平衡清晰度与速度)
-            pix = page.get_pixmap(dpi=200)
-            img_path = file_path + f"_page_{i}.png"
-            pix.save(img_path)
-            try:
-                result = ocr.ocr(img_path, cls=True)
-                page_text = _format_ocr_result(result)
-                if page_text.strip():
-                    parts.append(f"## Page {i}\n\n{page_text}\n")
-            finally:
-                # 清理临时图片
-                if os.path.exists(img_path):
-                    os.remove(img_path)
-        doc.close()
-    else:
-        # 图片直接 OCR
-        result = ocr.ocr(file_path, cls=True)
-        page_text = _format_ocr_result(result)
-        if page_text.strip():
-            parts.append(page_text)
-
-    content = "\n".join(parts) if parts else ""
-    score = 80.0 if content else 30.0
-    return content, score
-
-
-def _format_ocr_result(result) -> str:
-    """将 PaddleOCR 结果格式化为纯文本
-
-    PaddleOCR 返回格式: [[ [bbox], (text, confidence) ], ...]
-    """
-    lines = []
-    if not result:
-        return ""
-    for page in result:
-        if not page:
+    # runner 把结果 JSON 打印到 stdout 的某一行；其余为库日志噪声。
+    # 取最后一行可解析为 JSON 的输出作为结果。
+    result_json = None
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
             continue
-        for line in page:
-            if line and len(line) >= 2:
-                text = line[1][0] if isinstance(line[1], tuple) else str(line[1])
-                if text.strip():
-                    lines.append(text)
-    return "\n".join(lines)
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        result_json = candidate  # 不断覆盖，最终保留最后一条合法 JSON
+
+    if proc.returncode != 0 or result_json is None:
+        err = (result_json or {}).get("error") if isinstance(result_json, dict) else None
+        stderr = (proc.stderr or "")[-500:]
+        detail = err or stderr or f"PaddleOCR 子进程退出码 {proc.returncode}"
+        raise RuntimeError(f"PaddleOCR 解析失败: {detail}")
+
+    if "error" in result_json:
+        raise RuntimeError(f"PaddleOCR 解析失败: {result_json['error']}")
+
+    content = result_json.get("content", "")
+    score = float(result_json.get("score", 30.0))
+    return content, score
 
 
 def parse_with_mineru(file_path: str) -> Tuple[str, float]:

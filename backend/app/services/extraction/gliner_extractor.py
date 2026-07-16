@@ -6,7 +6,7 @@
 优势:
   - 模型小 (medium ~340MB), CPU 可跑
   - 零样本: 不需要训练数据, 直接指定实体类型名即可
-  - 支持多语言 (urchade/gliner_multilingual)
+  - 支持多语言 (urchade/gliner_base；原 multilingual 已 gated 需鉴权，hf-mirror 无法下载)
 
 降级策略:
   1. 有 gliner 模型 → 直接预测 (首选)
@@ -23,7 +23,10 @@ _GLINER_AVAILABLE = None
 _MODEL_CACHE = None
 
 # 默认多语言模型
-DEFAULT_MODEL = "urchade/gliner_multilingual"
+# 默认模型改为 urchade/gliner_base：原 urchade/gliner_multilingual 已变为 gated 仓库，
+# 在走 hf-mirror 的离线/受限网络下会因 401 无法下载；gliner_base 为非 gated 公开模型，
+# 同属 GLiNER 系列，from_pretrained 接口与零样本 NER 行为完全兼容。
+DEFAULT_MODEL = "urchade/gliner_base"
 
 
 def extract_with_gliner(
@@ -47,7 +50,7 @@ def extract_with_gliner(
     Args:
         md_content: Markdown 文本
         schemas: Schema 约束列表
-        model_name: GLiNER 模型名 (默认 urchade/gliner_multilingual)
+        model_name: GLiNER 模型名 (默认 urchade/gliner_base)
         labels: 手动指定的实体类型 (None=从 Schema 自动提取)
         threshold: GLiNER 置信度阈值 [0-1]
     
