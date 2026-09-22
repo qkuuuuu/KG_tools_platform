@@ -5,7 +5,6 @@
 [![Vue](https://img.shields.io/badge/Vue-3.4+-success.svg)](https://vuejs.org/)
 [![Docker](https://img.shields.io/badge/Docker--Compose-blue.svg)](https://www.docker.com/)
 
-> **说明：本项目为内部私有项目，暂不开源，不提供许可证。** 仅用于展示技术架构与功能说明。
 
 ---
 
@@ -344,9 +343,7 @@ docker compose exec postgres-db pg_dump -U postgres kg_platform > backup_$(date 
 
 ---
 
-## 许可证
 
-本项目为内部私有项目，暂不开放源代码与许可证授权。
 
 ---
 
